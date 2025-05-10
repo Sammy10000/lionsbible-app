@@ -1,36 +1,21 @@
-﻿import type { Config } from "tailwindcss";
+﻿import type { Config } from 'tailwindcss';
 
 const config: Config = {
   content: [
-    './src/pages/**/*.{js,ts,jsx,tsx,mdx}',
-    './src/components/**/*.{js,ts,jsx,tsx,mdx}',
-    './src/app/**/*.{js,ts,jsx,tsx,mdx}',
+    './src/**/*.{js,ts,jsx,tsx,mdx}',
+    './app/**/*.{js,ts,jsx,tsx,mdx}',
   ],
   theme: {
     extend: {
       colors: {
         'bible-gold': '#D4AF37',
       },
-      screens: {
-        '3xl': '1792px',
+      fontFamily: {
+        comfortaa: ['Comfortaa', 'sans-serif'],
       },
     },
   },
-  plugins: [require("daisyui")],
-  daisyui: {
-    themes: [
-      {
-        light: {
-          "primary": "#1d4ed8",
-          "secondary": "#9333ea",
-        },
-        dark: {
-          "primary": "#3b82f6",
-          "secondary": "#a855f7",
-        }
-      }
-    ],
-  },
+  plugins: [],
 };
 
 export default config;

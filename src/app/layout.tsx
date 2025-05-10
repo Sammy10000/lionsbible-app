@@ -1,21 +1,16 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Comfortaa } from "next/font/google";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+const comfortaa = Comfortaa({
+  variable: "--font-comfortaa",
   subsets: ["latin"],
 });
 
 export const metadata: Metadata = {
   title: "Lions Bible",
-  description: "Bible study app",
-  themeColor: "#ffffff",
+  description: "A Progressive Web App for Bible study and community engagement on lionsbible.com.",
+  themeColor: "#000000",
 };
 
 export default function RootLayout({
@@ -31,7 +26,7 @@ export default function RootLayout({
         <link rel="manifest" href="/manifest.json" />
         <meta name="theme-color" content="#000000" />
       </head>
-      <body className={`${geistSans.variable} ${geistMono.variable} antialiased bg-base-100 text-base-content`}>
+      <body className={`${comfortaa.variable} antialiased bg-base-100 text-base-content`}>
         {children}
       </body>
     </html>

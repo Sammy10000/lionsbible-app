@@ -1,8 +1,17 @@
-import withPWA from 'next-pwa';
 import type { NextConfig } from 'next';
+import withPWA from 'next-pwa';
 
 const nextConfig: NextConfig = {
-  // other config options here...
+  experimental: {
+    serverActions: {},
+    turbo: {
+      resolveAlias: {},
+    },
+  },
+  output: 'standalone',
+  images: {
+    unoptimized: true,
+  },
 };
 
 export default withPWA({
