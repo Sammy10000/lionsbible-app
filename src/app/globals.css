@@ -24,4 +24,49 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: 'Comfortaa', sans-serif;
+  /**Generic focus indicator**/
+  [tabindex]:not([tabindex="-1"]):focus-visible,
+a[href]:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[role="button"]:focus-visible,
+[role="link"]:focus-visible,
+[contenteditable]:focus-visible,
+[controls]:focus-visible {
+  box-shadow:
+    0 0 0 2px #ffffff,
+    0 0 0 5px #000000 !important;
+  border-radius: 0.25em;
+  transition: all 0.15s ease-out;
+  z-index: 1;
+  outline: none !important;
+}
+
+input[type="checkbox"]:focus-visible,
+input[type="radio"]:focus-visible {
+  box-shadow:
+    0 0 0 2px #ffffff,
+    0 0 0 4px #000000 !important;
+  outline: none !important;
+}
+
+input[type="range"]:focus-visible {
+  box-shadow:
+    0 0 0 2px #ffffff,
+    0 0 0 5px #000000 !important;
+  outline: none !important;
+}
+
+[data-focus-visible-added]:focus-visible {
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+:focus:not(:focus-visible) {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
 }
