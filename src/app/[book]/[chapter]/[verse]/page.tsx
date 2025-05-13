@@ -2,6 +2,8 @@ import { notFound } from 'next/navigation';
 import { createClient, createStaticClient } from '@/utils/supabase/server';
 import VerseCard from './VerseCard';
 import InterpretationSection from './InterpretationSection';
+import Navigation from './Navigation';
+import VersePageClient from './VersePageClient';
 import type { Metadata } from 'next';
 
 interface Verse {
@@ -93,6 +95,7 @@ export default async function VersePage({ params }: VersePageProps) {
     notFound();
   }
 
+  // Fetch the current verse
   const { data: verse, error } = await supabase
     .from('verses')
     .select('*')
@@ -108,15 +111,34 @@ export default async function VersePage({ params }: VersePageProps) {
     notFound();
   }
 
+  // Fetch the previous verse
+  const { data: prevVerse } = await supabase
+    .from('verses')
+    .select('book, chapter, verse')
+    .eq('book', book)
+    .or(`and(chapter.eq.${chapter},verse.eq.${verseNum - 1}),and(chapter.eq.${chapter - 1},verse.gte.1)`)
+    .order('chapter', { ascending: false })
+    .order('verse', { ascending: false })
+    .limit(1)
+    .single();
+
+  // Fetch the next verse
+  const { data: nextVerse } = await supabase
+    .from('verses')
+    .select('book, chapter, verse')
+    .eq('book', book)
+    .or(`and(chapter.eq.${chapter},verse.eq.${verseNum + 1}),and(chapter.eq.${chapter + 1},verse.eq.1)`)
+    .order('chapter', { ascending: true })
+    .order('verse', { ascending: true })
+    .limit(1)
+    .single();
+
   return (
-    <div className="min-h-screen bg-gray-100 py-8 px-4">
-      <div className="max-w-4xl mx-auto">
-        <h1 className="text-3xl font-bold text-gray-800 mb-8 text-center">
-          {verse.book} {verse.chapter}:{verse.verse}
-        </h1>
-        <VerseCard verse={verse} />
-        <InterpretationSection verseId={verse.id} />
-      </div>
-    </div>
+    <VersePageClient
+      verse={verse}
+      prevVerse={prevVerse}
+      nextVerse={nextVerse}
+      params={params}
+    />
   );
 }
