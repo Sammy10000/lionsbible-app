@@ -180,8 +180,7 @@ export default function Header() {
   }, []);
 
   return (
-    <>
-      <Sidebar isOpen={isSidebarOpen} toggleSidebar={toggleSidebar} />
+    <>      
       <header
         className="sticky top-0 z-40 bg-white text-grey shadow-lg w-full h-16"
         style={{ willChange: 'transform' }}
@@ -296,6 +295,7 @@ export default function Header() {
         </div>
         <ScrollProgressBar />
       </header>
+      <Sidebar isOpen={isSidebarOpen} toggleSidebar={toggleSidebar} />
 
       {/* Loader Overlay */}
       {isNavigating && (

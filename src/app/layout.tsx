@@ -3,6 +3,7 @@ import { Comfortaa } from 'next/font/google';
 import './globals.css';
 import Header from '@/components/Header';
 import ThemeWrapper from '@/components/ThemeWrapper';
+import { Toaster } from 'react-hot-toast';
 
 const comfortaa = Comfortaa({
   variable: '--font-comfortaa',
@@ -24,6 +25,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body className={`${comfortaa.variable} antialiased bg-base-100 text-base-content flex flex-col min-h-screen`}>
         <ThemeWrapper>
+          <Toaster position="top-right" toastOptions={{ duration: 4000 }} />
           <Header />
           <div className="flex flex-1">
             <main className="flex-1">{children}</main>

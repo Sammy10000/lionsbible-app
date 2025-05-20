@@ -86,7 +86,7 @@ export default function InterpretationSection({ verseId }: InterpretationSection
 
       {/* Interpretation Form */}
       <form onSubmit={handleInterpretationSubmit} className="space-y-4">
-        <label htmlFor={`interpretation-${verseId}`} className="block text-gray-700">
+        <label htmlFor={`interpretation-${verseId}`} className="block text-black-700">
           Your Insight
         </label>
         <textarea
