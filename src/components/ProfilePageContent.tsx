@@ -5,7 +5,8 @@ import { FaUser, FaPencilAlt } from 'react-icons/fa';
 import { createClient } from '@/utils/supabase/client';
 import countries from 'i18n-iso-countries';
 import en from 'i18n-iso-countries/langs/en.json';
-import toast from 'react-hot-toast';
+import { toast, ToastContainer } from 'react-toastify';
+import 'react-toastify/dist/ReactToastify.css';
 import { useRouter } from 'next/navigation';
 
 countries.registerLocale(en);
@@ -39,9 +40,8 @@ export default function ProfilePageContent({ profile: initialProfile, currentUse
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [detectedCountry, setDetectedCountry] = useState<string | null>(null);
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
-  const [avatarTimestamp, setAvatarTimestamp] = useState(0);
+  const [avatarTimestamp, setAvatarTimestamp] = useState(Date.now());
   const [avatarLoadFailed, setAvatarLoadFailed] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [clientUser, setClientUser] = useState(currentUser);
   const [authChecked, setAuthChecked] = useState(false);
 
@@ -63,10 +63,6 @@ export default function ProfilePageContent({ profile: initialProfile, currentUse
       setAuthChecked(true);
     }
   }, [supabase.auth, currentUser]);
-
-  useEffect(() => {
-    setAvatarTimestamp(Date.now());
-  }, []);
 
   useEffect(() => {
     setProfile(initialProfile);
@@ -132,9 +128,10 @@ export default function ProfilePageContent({ profile: initialProfile, currentUse
         .eq('username', cleanUsername)
         .maybeSingle();
 
-      return error ? false : !data;
-    } catch (err) {
-      toast.error('Error checking username');
+      if (error) throw new Error('Error checking username');
+      return !data;
+    } catch (err: any) {
+      toast.error(err.message, { className: 'Toastify' });
       return false;
     }
   };
@@ -142,7 +139,6 @@ export default function ProfilePageContent({ profile: initialProfile, currentUse
   const handleUpdateField = async (field: keyof UserProfileData) => {
     if (!authChecked || !clientUser?.id || !editValues[field]) return;
     setLoading(true);
-    setError(null);
 
     try {
       if (field === 'username') {
@@ -171,10 +167,9 @@ export default function ProfilePageContent({ profile: initialProfile, currentUse
       }
 
       setEditingField(null);
-      toast.success(`${field.replace('_', ' ')} updated`);
+      toast.success(`${field.replace('_', ' ')} updated`, { className: 'Toastify' });
     } catch (err: any) {
-      setError(err.message);
-      toast.error(err.message);
+      toast.error(err.message, { className: 'Toastify' });
     } finally {
       setLoading(false);
     }
@@ -194,10 +189,9 @@ export default function ProfilePageContent({ profile: initialProfile, currentUse
 
       setProfile(prev => ({ ...prev, social_links: editValues.social_links }));
       setEditingField(null);
-      toast.success('Social links updated');
+      toast.success('Social links updated', { className: 'Toastify' });
     } catch (err: any) {
-      setError(err.message);
-      toast.error(err.message);
+      toast.error(err.message, { className: 'Toastify' });
     } finally {
       setLoading(false);
     }
@@ -205,53 +199,135 @@ export default function ProfilePageContent({ profile: initialProfile, currentUse
 
   const handleAvatarUpload = async () => {
     if (!authChecked || !clientUser?.id || !avatarFile) {
-      toast.error('Unauthorized action');
+      toast.error('Unauthorized action', { className: 'Toastify' });
       return;
     }
-    
+
     setLoading(true);
-    setError(null);
 
     try {
-      if (avatarFile.size > 2 * 1024 * 1024) throw new Error('File exceeds 2MB limit');
+      // Validate user_id matches auth.uid()
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user || user.id !== clientUser.id) {
+        throw new Error('User authentication mismatch');
+      }
 
-      const fileName = `${clientUser.id}-${Date.now()}-${avatarFile.name
-        .replace(/\s/g, '-')
-        .replace(/[^a-zA-Z0-9-.]/g, '')}`;
+      // Verify profile exists
+      const { data: profileCheck, error: profileError } = await supabase
+        .from('user_profiles')
+        .select('user_id, avatar')
+        .eq('user_id', clientUser.id)
+        .single();
+      if (profileError || !profileCheck) {
+        console.error('Profile check error:', profileError?.message);
+        throw new Error('User profile not found');
+      }
 
+      // Explicitly clear old avatar URL in database
+      const { error: clearError } = await supabase
+        .from('user_profiles')
+        .update({ avatar: null })
+        .eq('user_id', clientUser.id);
+      if (clearError) {
+        console.error('Failed to clear avatar:', clearError.message);
+        throw new Error('Failed to clear avatar');
+      }
+
+      // Delete old avatar file from bucket
+      if (profileCheck.avatar) {
+        const oldAvatar = profileCheck.avatar.split('/').pop()?.split('?')[0];
+        if (oldAvatar) {
+          const { error: deleteError } = await supabase.storage
+            .from('avatars')
+            .remove([oldAvatar]);
+          if (deleteError) {
+            console.warn('Failed to delete old avatar:', deleteError.message);
+          }
+        }
+      }
+
+      // Clean up orphaned avatars
+      const { data: files, error: listError } = await supabase.storage
+        .from('avatars')
+        .list('', { limit: 1000 });
+      if (listError) {
+        console.warn('Failed to list bucket:', listError.message);
+      } else if (files) {
+        const userFiles = files
+          .filter(f => f.name.startsWith(`${clientUser.id}-`))
+          .map(f => f.name);
+        if (userFiles.length > 0) {
+          const { error: deleteError } = await supabase.storage
+            .from('avatars')
+            .remove(userFiles);
+          if (deleteError) {
+            console.warn('Failed to delete orphaned files:', deleteError.message);
+          }
+        }
+      }
+
+      // Validate file type
+      const allowedTypes = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/svg+xml'];
+      if (!allowedTypes.includes(avatarFile.type)) {
+        throw new Error('Only PNG, JPG, GIF, WebP, SVG allowed');
+      }
+
+      // Validate file size (2MB)
+      if (avatarFile.size > 2 * 1024 * 1024) {
+        throw new Error('File exceeds 2MB');
+      }
+
+      // Generate file name
+      const timestamp = `${Date.now()}-${new Date().toISOString().replace(/[:.]/g, '')}`;
+      const fileExt = avatarFile.name.split('.').pop()?.toLowerCase();
+      const fileName = `${clientUser.id}-${timestamp}.${fileExt}`;
+
+      // Upload to bucket root
       const { error: uploadError } = await supabase.storage
         .from('avatars')
-        .upload(fileName, avatarFile, { 
+        .upload(fileName, avatarFile, {
           cacheControl: '3600',
           contentType: avatarFile.type,
         });
+      if (uploadError) {
+        console.error('Upload error:', uploadError.message);
+        throw new Error('Failed to upload avatar');
+      }
 
-      if (uploadError) throw uploadError;
-
-      const { data: { publicUrl } } = await supabase.storage
+      // Fetch public URL from storage
+      const { data: { publicUrl } } = supabase.storage
         .from('avatars')
         .getPublicUrl(fileName);
+      if (!publicUrl || !publicUrl.includes(fileName)) {
+        console.error('Invalid public URL:', publicUrl);
+        await supabase.storage.from('avatars').remove([fileName]);
+        throw new Error('Failed to retrieve public URL');
+      }
 
+      // Save avatar URL to user_profiles
       const { error: updateError } = await supabase
         .from('user_profiles')
         .update({ avatar: publicUrl })
         .eq('user_id', clientUser.id);
-
-      if (updateError) throw updateError;
-
-      const oldAvatar = profile.avatar?.split('/avatars/')[1]?.split('?')[0];
-      if (oldAvatar && oldAvatar !== fileName) {
-        await supabase.storage.from('avatars').remove([oldAvatar]);
+      if (updateError) {
+        console.error('Failed to update avatar URL:', updateError.message);
+        await supabase.storage.from('avatars').remove([fileName]);
+        throw new Error('Failed to save avatar URL');
       }
 
-      setProfile(prev => ({ ...prev, avatar: publicUrl }));
+      // Update profile state
+      setProfile(prev => ({
+        ...prev,
+        avatar: publicUrl,
+      }));
       setAvatarTimestamp(Date.now());
+      setAvatarLoadFailed(false);
       setAvatarFile(null);
       setEditingField(null);
-      toast.success('Avatar updated');
+      toast.success('Avatar updated', { className: 'Toastify' });
     } catch (err: any) {
-      setError(err.message);
-      toast.error(err.message);
+      toast.error(err.message, { className: 'Toastify' });
+      console.error('Avatar upload error:', err.message);
     } finally {
       setLoading(false);
     }
@@ -260,7 +336,6 @@ export default function ProfilePageContent({ profile: initialProfile, currentUse
   const handleDeleteAccount = async () => {
     if (!authChecked || !clientUser?.id) return;
     setLoading(true);
-    setError(null);
 
     try {
       if (profile.avatar) {
@@ -295,10 +370,9 @@ export default function ProfilePageContent({ profile: initialProfile, currentUse
 
       await supabase.auth.signOut();
       router.push('/');
-      toast.success('Account deleted');
+      toast.success('Account deleted', { className: 'Toastify' });
     } catch (err: any) {
-      setError(err.message);
-      toast.error(err.message);
+      toast.error(err.message, { className: 'Toastify' });
     } finally {
       setLoading(false);
       setIsDeleteConfirmOpen(false);
@@ -310,9 +384,9 @@ export default function ProfilePageContent({ profile: initialProfile, currentUse
     try {
       await supabase.auth.signOut();
       router.push('/');
-      toast.success('Signed out');
+      toast.success('Signed out', { className: 'Toastify' });
     } catch (err: any) {
-      toast.error(err.message);
+      toast.error(err.message, { className: 'Toastify' });
     } finally {
       setLoading(false);
     }
@@ -340,287 +414,296 @@ export default function ProfilePageContent({ profile: initialProfile, currentUse
 
   return (
     <div className="max-w-4xl mx-auto bg-white rounded-lg shadow-lg p-4 sm:p-6 lg:p-8">
-  <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold text-gray-800 mb-4 sm:mb-6 text-center">
-    {isOwnProfile ? 'My Profile' : `@${profile.username}'s Profile`}
-  </h1>
+      <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold text-gray-800 mb-4 sm:mb-6 text-center">
+        {isOwnProfile ? 'My Profile' : `@${profile.username}'s Profile`}
+      </h1>
 
-  <div className="flex flex-col items-center mb-4 sm:mb-6">
-    {editingField === 'avatar' ? (
-      <div className="text-center w-full max-w-xs">
-        <div className="flex flex-col items-center gap-2">
-          <label className="cursor-pointer w-full">
-            <span className="inline-flex items-center justify-center px-4 py-2 bg-[#207788] text-white text-sm font-medium rounded-md hover:bg-teal-900 w-full">
-              Choose Avatar
-            </span>
-            <input
-              type="file"
-              accept="image/*"
-              onChange={(e) => setAvatarFile(e.target.files?.[0] || null)}
-              className="hidden"
-            />
-          </label>
-          {avatarFile && (
-            <span className="text-xs text-gray-600 truncate w-full text-center">
-              {avatarFile.name}
-            </span>
-          )}
-        </div>
-        <p className="text-xs text-gray-600 mt-2 mb-2">Max 2MB</p>
-        <div className="flex flex-col gap-2 w-full">
-          <button
-            onClick={handleAvatarUpload}
-            disabled={!avatarFile || loading}
-            className="text-sm bg-teal-500 text-white px-4 py-2 rounded-md hover:bg-teal-600 disabled:opacity-50 w-full"
-          >
-            {loading ? 'Uploading...' : 'Save'}
-          </button>
-          <button
-            onClick={() => setEditingField(null)}
-            className="text-sm bg-gray-300 px-4 py-2 rounded-md hover:bg-gray-400 w-full"
-          >
-            Cancel
-          </button>
-        </div>
-      </div>
-    ) : (
-      <div className="relative group w-full max-w-[120px] sm:max-w-[160px]">
-        {profile.avatar && !avatarLoadFailed ? (
-          <img
-            src={`${profile.avatar}${avatarTimestamp ? `?t=${avatarTimestamp}` : ''}`}
-            alt="Avatar"
-            className="w-20 h-20 sm:w-24 sm:h-24 lg:w-32 lg:h-32 rounded-full border-4 border-teal-500 mb-4 object-cover mx-auto"
-            onError={() => setAvatarLoadFailed(true)}
-          />
-        ) : (
-          <div className="w-20 h-20 sm:w-24 sm:h-24 lg:w-32 lg:h-32 rounded-full border-4 border-[#207788] bg-gray-200 flex items-center justify-center mx-auto">
-            <FaUser className="w-10 h-10 sm:w-12 sm:h-12 lg:w-16 lg:h-16 text-gray-500" />
-          </div>
-        )}
-        {isOwnProfile && (
-          <div className="absolute inset-0 bg-black bg-opacity-50 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-            <button
-              onClick={() => setEditingField('avatar')}
-              className="text-white hover:text-teal-300 p-2"
-            >
-              <FaPencilAlt className="w-5 h-5" />
-            </button>
-          </div>
-        )}
-      </div>
-    )}
-    {isOwnProfile && profile.email && (
-      <p className="text-sm sm:text-base font-semibold text-gray-800 mt-4 px-4 break-words text-center max-w-full">
-        {profile.email}
-      </p>
-    )}
-    {profile.username && (
-      <p className="text-sm sm:text-base font-semibold text-gray-800 mt-2 px-4 break-words text-center max-w-full">
-        @{profile.username}
-      </p>
-    )}
-  </div>
-
-  {error && (
-    <p className="text-red-500 mb-4 text-center text-xs sm:text-sm" role="alert">
-      {error}
-    </p>
-  )}
-
-  <div className="grid grid-cols-1 gap-3">
-    {[
-      { field: 'username', label: 'Username' },
-      { field: 'full_name', label: 'Full Name' },
-      { field: 'profile_bio', label: 'Bio', textarea: true, rows: 3 },
-      { field: 'country', label: 'Country', select: countryList },
-      { field: 'faith_role', label: 'Faith Role' },
-      { field: 'faith_affiliation', label: 'Faith Affiliation' },
-    ].map(({ field, label, textarea, select, rows }) => (
-      <div key={field} className="flex flex-col p-3 bg-white rounded-md shadow-sm">
-        {editingField === field ? (
-          <div className="flex-1 w-full">
-            {textarea ? (
-              <textarea
-                value={editValues[field] || ''}
-                onChange={(e) => setEditValues({ ...editValues, [field]: e.target.value })}
-                className="w-full p-2 text-sm border rounded-md focus:ring-2 focus:ring-teal-500"
-                rows={rows}
-              />
-            ) : select ? (
-              <select
-                value={editValues[field] || profile[field as keyof UserProfileData] || ''}
-                onChange={(e) => setEditValues({ ...editValues, [field]: e.target.value })}
-                className="w-full p-2 text-sm border rounded-md focus:ring-2 focus:ring-teal-500"
-              >
-                <option value="">Select {label}</option>
-                {select.map(({ code, name }) => (
-                  <option key={code} value={code}>{name}</option>
-                ))}
-              </select>
-            ) : (
-              <input
-                type="text"
-                value={editValues[field] || ''}
-                onChange={(e) => setEditValues({ ...editValues, [field]: e.target.value })}
-                className="w-full p-2 text-sm border rounded-md focus:ring-2 focus:ring-teal-500"
-              />
-            )}
-            <div className="flex flex-col gap-2 mt-2">
+      <div className="flex flex-col items-center mb-4 sm:mb-6">
+        {editingField === 'avatar' ? (
+          <div className="text-center w-full max-w-xs">
+            <div className="flex flex-col items-center gap-2">
+              <label className="cursor-pointer w-full">
+                <span className="inline-flex items-center justify-center px-4 py-2 bg-[#207788] text-white text-sm font-medium rounded-md hover:bg-teal-900 w-full">
+                  Choose Avatar
+                </span>
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml"
+                  onChange={(e) => setAvatarFile(e.target.files?.[0] || null)}
+                  className="hidden"
+                />
+              </label>
+              {avatarFile && (
+                <span className="text-xs text-gray-600 truncate w-full text-center">
+                  {avatarFile.name}
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-gray-600 mt-2 mb-2">Max 2MB</p>
+            <div className="flex flex-col gap-2 w-full">
               <button
-                onClick={() => handleUpdateField(field as keyof UserProfileData)}
-                className="bg-teal-500 text-white px-4 py-2 text-sm rounded-md hover:bg-teal-600"
+                onClick={handleAvatarUpload}
+                disabled={!avatarFile || loading}
+                className="text-sm bg-teal-500 text-white px-4 py-2 rounded-md hover:bg-teal-600 disabled:opacity-50 w-full"
               >
-                Save
+                {loading ? 'Uploading...' : 'Save'}
               </button>
               <button
                 onClick={() => setEditingField(null)}
-                className="bg-gray-300 px-4 py-2 text-sm rounded-md hover:bg-gray-400"
+                className="text-sm bg-gray-300 px-4 py-2 rounded-md hover:bg-gray-400 w-full"
               >
                 Cancel
               </button>
             </div>
           </div>
         ) : (
-          <div className="flex items-center justify-between">
-            <div className="flex-1">
-              <strong className="text-sm">{label}:</strong> {field === 'country' && profile.country ? (
-                <span className="text-sm">
-                  {`${getFlagEmoji(profile.country)} ${countries.getName(profile.country, 'en')}`}
+          <div className="relative group w-full max-w-[120px] sm:max-w-[160px]">
+            {profile.avatar && !avatarLoadFailed ? (
+              <img
+                src={`${profile.avatar}?t=${avatarTimestamp}`}
+                alt="Avatar"
+                className="w-20 h-20 sm:w-24 sm:h-24 lg:w-32 lg:h-32 rounded-full border-4 border-teal-500 mb-4 object-cover mx-auto"
+                onError={() => setAvatarLoadFailed(true)}
+              />
+            ) : (
+              <div className="w-20 h-20 sm:w-24 sm:h-24 lg:w-32 lg:h-32 rounded-full border-4 border-[#207788] bg-gray-200 flex items-center justify-center mx-auto">
+                <span className="text-2xl sm:text-3xl lg:text-4xl font-semibold text-gray-500">
+                  {profile.username ? profile.username.slice(0, 2).toUpperCase() : <FaUser className="w-10 h-10 sm:w-12 sm:h-12 lg:w-16 lg:h-16 text-gray-500" />}
                 </span>
-              ) : (
-                <span className="text-sm">
-                  {profile[field as keyof UserProfileData] || 'Empty'}
-                </span>
-              )}
-            </div>
+              </div>
+            )}
+            {isOwnProfile && (
+              <div className="absolute inset-0 bg-black bg-opacity-50 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                <button
+                  onClick={() => setEditingField('avatar')}
+                  className="text-white hover:text-teal-300 p-2"
+                >
+                  <FaPencilAlt className="w-5 h-5" />
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+        {isOwnProfile && profile.email && (
+          <p className="text-sm sm:text-base font-semibold text-gray-800 mt-4 px-4 break-words text-center max-w-full">
+            {profile.email}
+          </p>
+        )}
+        {profile.username && (
+          <p className="text-sm sm:text-base font-semibold text-gray-800 mt-2 px-4 break-words text-center max-w-full">
+            @{profile.username}
+          </p>
+        )}
+      </div>
+
+      <div className="grid grid-cols-1 gap-3">
+        {[
+          { field: 'username', label: 'Username' },
+          { field: 'full_name', label: 'Full Name' },
+          { field: 'profile_bio', label: 'Bio', textarea: true, rows: 3 },
+          { field: 'country', label: 'Country', select: countryList },
+          { field: 'faith_role', label: 'Faith Role' },
+          { field: 'faith_affiliation', label: 'Faith Affiliation' },
+        ].map(({ field, label, textarea, select, rows }) => (
+          <div key={field} className="flex flex-col p-3 bg-white rounded-md shadow-sm">
+            {editingField === field ? (
+              <div className="flex-1 w-full">
+                {textarea ? (
+                  <textarea
+                    value={editValues[field] || ''}
+                    onChange={(e) => setEditValues({ ...editValues, [field]: e.target.value })}
+                    className="w-full p-2 text-sm border rounded-md focus:ring-2 focus:ring-teal-500"
+                    rows={rows}
+                  />
+                ) : select ? (
+                  <select
+                    value={editValues[field] || profile[field as keyof UserProfileData] || ''}
+                    onChange={(e) => setEditValues({ ...editValues, [field]: e.target.value })}
+                    className="w-full p-2 text-sm border rounded-md focus:ring-2 focus:ring-teal-500"
+                  >
+                    <option value="">Select {label}</option>
+                    {select.map(({ code, name }) => (
+                      <option key={code} value={code}>{name}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    value={editValues[field] || ''}
+                    onChange={(e) => setEditValues({ ...editValues, [field]: e.target.value })}
+                    className="w-full p-2 text-sm border rounded-md focus:ring-2 focus:ring-teal-500"
+                  />
+                )}
+                <div className="flex flex-col gap-2 mt-2">
+                  <button
+                    onClick={() => handleUpdateField(field as keyof UserProfileData)}
+                    className="bg-teal-500 text-white px-4 py-2 text-sm rounded-md hover:bg-teal-600"
+                  >
+                    Save
+                  </button>
+                  <button
+                    onClick={() => setEditingField(null)}
+                    className="bg-gray-300 px-4 py-2 text-sm rounded-md hover:bg-gray-400"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center justify-between">
+                <div className="flex-1">
+                  <strong className="text-sm">{label}:</strong> {field === 'country' && profile.country ? (
+                    <span className="text-sm">
+                      {`${getFlagEmoji(profile.country)} ${countries.getName(profile.country, 'en')}`}
+                    </span>
+                  ) : (
+                    <span className="text-sm">
+                      {profile[field as keyof UserProfileData] || 'Empty'}
+                    </span>
+                  )}
+                </div>
+                {isOwnProfile && (
+                  <button
+                    onClick={() => setEditingField(field)}
+                    className="text-gray-500 hover:text-teal-500 ml-2"
+                  >
+                    <FaPencilAlt className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        ))}
+
+        <div className="p-4 bg-white rounded-md shadow-sm">
+          <div className="flex items-center justify-between mb-2">
+            <strong className="text-sm">Social Links:</strong>
             {isOwnProfile && (
               <button
-                onClick={() => setEditingField(field)}
-                className="text-gray-500 hover:text-teal-500 ml-2"
+                onClick={() => setEditingField('social_links')}
+                className="text-gray-500 hover:text-teal-500"
               >
                 <FaPencilAlt className="w-4 h-4" />
               </button>
             )}
           </div>
-        )}
-      </div>
-    ))}
-
-    <div className="p-4 bg-white rounded-md shadow-sm">
-      <div className="flex items-center justify-between mb-2">
-        <strong className="text-sm">Social Links:</strong>
-        {isOwnProfile && (
-          <button
-            onClick={() => setEditingField('social_links')}
-            className="text-gray-500 hover:text-teal-500"
-          >
-            <FaPencilAlt className="w-4 h-4" />
-          </button>
-        )}
-      </div>
-      {editingField === 'social_links' ? (
-        <div className="space-y-4">
-          <div className="grid grid-cols-1 gap-4">
-            {['twitter', 'facebook', 'instagram', 'website'].map((platform) => (
-              <div key={platform} className="space-y-1">
-                <label className="block text-sm font-medium text-gray-700">
-                  {platform.charAt(0).toUpperCase() + platform.slice(1)}
-                </label>
-                <input
-                  type="url"
-                  value={editValues.social_links?.[platform] || ''}
-                  onChange={(e) => setEditValues({
-                    ...editValues,
-                    social_links: {
-                      ...editValues.social_links,
-                      [platform]: e.target.value
-                    }
-                  })}
-                  className="w-full p-2 text-sm border rounded-md focus:ring-2 focus:ring-teal-500"
-                />
+          {editingField === 'social_links' ? (
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 gap-4">
+                {['twitter', 'facebook', 'instagram', 'website'].map((platform) => (
+                  <div key={platform} className="space-y-1">
+                    <label className="block text-sm font-medium text-gray-700">
+                      {platform.charAt(0).toUpperCase() + platform.slice(1)}
+                    </label>
+                    <input
+                      type="url"
+                      value={editValues.social_links?.[platform] || ''}
+                      onChange={(e) => setEditValues({
+                        ...editValues,
+                        social_links: {
+                          ...editValues.social_links,
+                          [platform]: e.target.value
+                        }
+                      })}
+                      className="w-full p-2 text-sm border rounded-md focus:ring-2 focus:ring-teal-500"
+                    />
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-          <div className="flex flex-col gap-2">
-            <button
-              onClick={handleUpdateSocialLinks}
-              className="bg-teal-500 text-white px-4 py-2 text-sm rounded-md hover:bg-teal-600"
-            >
-              Save
-            </button>
-            <button
-              onClick={() => setEditingField(null)}
-              className="bg-gray-300 px-4 py-2 text-sm rounded-md hover:bg-gray-400"
-            >
-              Cancel
-            </button>
-          </div>
+              <div className="flex flex-col gap-2">
+                <button
+                  onClick={handleUpdateSocialLinks}
+                  className="bg-teal-500 text-white px-4 py-2 text-sm rounded-md hover:bg-teal-600"
+                >
+                  Save
+                </button>
+                <button
+                  onClick={() => setEditingField(null)}
+                  className="bg-gray-300 px-4 py-2 text-sm rounded-md hover:bg-gray-400"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {profile.social_links && Object.entries(profile.social_links).map(([platform, url]) => (
+                url && (
+                  <a
+                    key={platform}
+                    href={url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-blue-500 hover:underline text-sm"
+                  >
+                    {platform.charAt(0).toUpperCase() + platform.slice(1)}
+                  </a>
+                )
+              ))}
+            </div>
+          )}
         </div>
-      ) : (
-        <div className="flex flex-wrap gap-2">
-          {profile.social_links && Object.entries(profile.social_links).map(([platform, url]) => (
-            url && (
-              <a
-                key={platform}
-                href={url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-blue-500 hover:underline text-sm"
-              >
-                {platform.charAt(0).toUpperCase() + platform.slice(1)}
-              </a>
-            )
-          ))}
+
+        <div className="p-4 bg-white rounded-md shadow-sm">
+          <strong className="text-sm">Verified:</strong> {profile.is_verified ? 'Yes' : 'No'}
         </div>
-      )}
-    </div>
+      </div>
 
-    <div className="p-4 bg-white rounded-md shadow-sm">
-      <strong className="text-sm">Verified:</strong> {profile.is_verified ? 'Yes' : 'No'}
-    </div>
-  </div>
-
-  {isOwnProfile && (
-    <div className="mt-6 flex flex-col gap-3">
-      <button
-        onClick={handleSignOut}
-        disabled={loading}
-        className="bg-red-600 text-white px-4 py-2 text-sm rounded-md hover:bg-red-700 disabled:opacity-50"
-      >
-        {loading ? 'Signing Out...' : 'Sign Out'}
-      </button>
-      <button
-        onClick={() => setIsDeleteConfirmOpen(true)}
-        disabled={loading}
-        className="bg-red-700 text-white px-4 py-2 text-sm rounded-md hover:bg-red-800 disabled:opacity-50"
-      >
-        Delete Account
-      </button>
-    </div>
-  )}
-
-  {isDeleteConfirmOpen && (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-lg p-4 w-full max-w-md">
-        <h3 className="text-lg font-bold mb-4">Confirm Account Deletion</h3>
-        <p className="mb-4 text-sm">This action cannot be undone. All your data will be permanently removed.</p>
-        <div className="flex flex-col gap-3">
+      {isOwnProfile && (
+        <div className="mt-6 flex flex-col gap-3">
           <button
-            onClick={() => setIsDeleteConfirmOpen(false)}
-            className="bg-gray-300 px-4 py-2 text-sm rounded-md hover:bg-gray-400"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={handleDeleteAccount}
+            onClick={handleSignOut}
             disabled={loading}
             className="bg-red-600 text-white px-4 py-2 text-sm rounded-md hover:bg-red-700 disabled:opacity-50"
           >
-            {loading ? 'Deleting...' : 'Delete Account'}
+            {loading ? 'Signing Out...' : 'Sign Out'}
+          </button>
+          <button
+            onClick={() => setIsDeleteConfirmOpen(true)}
+            disabled={loading}
+            className="bg-red-700 text-white px-4 py-2 text-sm rounded-md hover:bg-red-800 disabled:opacity-50"
+          >
+            Delete Account
           </button>
         </div>
-      </div>
+      )}
+
+      {isDeleteConfirmOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg p-4 w-full max-w-md">
+            <h3 className="text-lg font-bold mb-4">Confirm Account Deletion</h3>
+            <p className="mb-4 text-sm">This action cannot be undone. All your data will be permanently removed.</p>
+            <div className="flex flex-col gap-3">
+              <button
+                onClick={() => setIsDeleteConfirmOpen(false)}
+                className="bg-gray-300 px-4 py-2 text-sm rounded-md hover:bg-gray-400"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDeleteAccount}
+                disabled={loading}
+                className="bg-red-600 text-white px-4 py-2 text-sm rounded-md hover:bg-red-700 disabled:opacity-50"
+              >
+                {loading ? 'Deleting...' : 'Delete Account'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <ToastContainer
+        position="top-right"
+        autoClose={3000}
+        hideProgressBar={false}
+        newestOnTop
+        closeOnClick
+        rtl={false}
+        pauseOnFocusLoss
+        draggable
+        pauseOnHover
+        className="Toastify"
+      />
     </div>
-  )}
-</div>
   );
 }

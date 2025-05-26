@@ -3,7 +3,8 @@
 import { useState, useEffect } from 'react';
 import { FaUser, FaTimes } from 'react-icons/fa';
 import { createClient } from '@/utils/supabase/client';
-import toast from 'react-hot-toast';
+import { toast, ToastContainer } from 'react-toastify';
+import 'react-toastify/dist/ReactToastify.css';
 import { useRouter } from 'next/navigation';
 
 export default function UserProfile() {
@@ -14,7 +15,6 @@ export default function UserProfile() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [username, setUsername] = useState('');
-  const [error, setError] = useState<string | null>(null);
   const [user, setUser] = useState<any>(null);
   const [profile, setProfile] = useState<{ 
     username: string | null;
@@ -73,35 +73,32 @@ export default function UserProfile() {
         .maybeSingle();
       if (error) {
         console.error('Error checking username:', error.message, error);
-        toast.error('Error checking username availability. Please try again.');
+        toast.error('Error checking username availability. Please try again.', { className: 'Toastify' });
         return false;
       }
       return !data;
     } catch (err) {
       console.error('Unexpected error checking username:', err);
-      toast.error('Unexpected error checking username. Please try again.');
+      toast.error('Unexpected error checking username. Please try again.', { className: 'Toastify' });
       return false;
     }
   };
 
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError(null);
     setLoading(true);
 
     if (!username) {
-      setError('Username is required.');
+      toast.error('Username is required.', { className: 'Toastify' });
       setLoading(false);
-      toast.error('Username is required.');
       return;
     }
 
     const normalizedUsername = username.trim().toLowerCase();
     const isUnique = await checkUsernameUnique(normalizedUsername);
     if (!isUnique) {
-      setError('Username already taken.');
+      toast.error('Username already taken.', { className: 'Toastify' });
       setLoading(false);
-      toast.error('Username already taken.');
       return;
     }
 
@@ -112,9 +109,8 @@ export default function UserProfile() {
       });
       if (error) {
         console.error('Signup error:', error.message);
-        setError(error.message);
+        toast.error(error.message, { className: 'Toastify' });
         setLoading(false);
-        toast.error(error.message);
         return;
       }
 
@@ -129,8 +125,7 @@ export default function UserProfile() {
             onConflict: 'user_id'
           });
         if (profileError) {
-          setError(`Failed to set profile: ${profileError.message}`);
-          toast.error(`Failed to set profile: ${profileError.message}`);
+          toast.error(`Failed to set profile: ${profileError.message}`, { className: 'Toastify' });
           setLoading(false);
           return;
         }
@@ -138,38 +133,40 @@ export default function UserProfile() {
         setEmail('');
         setPassword('');
         setUsername('');
-        toast.success('Account created successfully! Please log in.');
+        toast.success('Account created successfully! Please log in.', { className: 'Toastify' });
         setIsSignUp(false);
         setLoading(false);
       }
     } catch (err) {
       console.error('Unexpected signup error:', err);
-      setError('Unexpected error during signup.');
-      toast.error('Unexpected error during signup.');
+      toast.error('Unexpected error during signup.', { className: 'Toastify' });
       setLoading(false);
     }
   };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError(null);
     setLoading(true);
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-    setLoading(false);
-    if (error) {
-      setError(error.message);
-      toast.error(error.message);
-    } else {
-      setEmail('');
-      setPassword('');
-      toast.success('Logged in successfully!');
-      setIsModalOpen(false);
-      if (profile?.username) {
-        router.push(`/users/@${profile.username}`);
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+      if (error) {
+        toast.error(error.message, { className: 'Toastify' });
+      } else {
+        setEmail('');
+        setPassword('');
+        toast.success('Logged in successfully!', { className: 'Toastify' });
+        setIsModalOpen(false);
+        if (profile?.username) {
+          router.push(`/users/@${profile.username}`);
+        }
       }
+    } catch (err) {
+      toast.error('Unexpected error during login.', { className: 'Toastify' });
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -197,7 +194,11 @@ export default function UserProfile() {
             onError={() => setAvatarError(true)}
           />
         ) : (
-          <FaUser className="w-6 h-6" />
+          <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center">
+            <span className="text-sm font-semibold text-gray-500">
+              {profile?.username ? profile.username.slice(0, 2).toUpperCase() : <FaUser className="w-6 h-6" />}
+            </span>
+          </div>
         )}
       </button>
 
@@ -215,11 +216,6 @@ export default function UserProfile() {
               <h2 className="text-2xl font-semibold mb-4 text-center">
                 {isSignUp ? 'Sign Up' : 'Log In'}
               </h2>
-              {error && (
-                <p className="text-red-500 mb-4 text-center" role="alert">
-                  {error}
-                </p>
-              )}
               <form onSubmit={isSignUp ? handleSignUp : handleLogin}>
                 {isSignUp && (
                   <div className="mb-4">
@@ -300,6 +296,19 @@ export default function UserProfile() {
           </div>
         </div>
       )}
+
+      <ToastContainer
+        position="top-right"
+        autoClose={3000}
+        hideProgressBar={false}
+        newestOnTop
+        closeOnClick
+        rtl={false}
+        pauseOnFocusLoss
+        draggable
+        pauseOnHover
+        className="Toastify"
+      />
     </>
   );
 }

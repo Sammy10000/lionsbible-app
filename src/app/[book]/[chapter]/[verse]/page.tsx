@@ -2,6 +2,7 @@ import { notFound } from 'next/navigation';
 import { createClient, createStaticClient } from '@/utils/supabase/server';
 import VerseCard from './VerseCard';
 import InterpretationSection from './InterpretationSection';
+import InboundReferences from './InboundReferences'; // New component
 import Navigation from './Navigation';
 import VersePageClient from './VersePageClient';
 import type { Metadata } from 'next';
@@ -15,6 +16,12 @@ interface Verse {
   transliteration: string;
   verbatim_english: string;
   kjv: string;
+}
+
+interface UserProfile {
+  user_id: string;
+  username: string | null;
+  avatar: string | null;
 }
 
 interface VersePageProps {
@@ -111,6 +118,22 @@ export default async function VersePage({ params }: VersePageProps) {
     notFound();
   }
 
+  // Fetch the current user's profile
+  const { data: { user } } = await supabase.auth.getUser();
+  let userProfile: UserProfile | null = null;
+  if (user) {
+    const { data: profile, error: profileError } = await supabase
+      .from('user_profiles')
+      .select('user_id, username, avatar')
+      .eq('user_id', user.id)
+      .single();
+    if (profileError) {
+      console.error('Error fetching user profile:', profileError.message);
+    } else {
+      userProfile = profile;
+    }
+  }
+
   // Fetch the previous verse
   const { data: prevVerse } = await supabase
     .from('verses')
@@ -138,6 +161,7 @@ export default async function VersePage({ params }: VersePageProps) {
       verse={verse}
       prevVerse={prevVerse}
       nextVerse={nextVerse}
+      userProfile={userProfile}
       params={params}
     />
   );

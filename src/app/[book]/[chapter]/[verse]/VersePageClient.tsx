@@ -1,9 +1,12 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import VerseCard from './VerseCard';
 import InterpretationSection from './InterpretationSection';
+import InboundReferences from './InboundReferences';
 import Navigation from './Navigation';
+import { toast, ToastContainer } from 'react-toastify'; // Import toast and ToastContainer
+import 'react-toastify/dist/ReactToastify.css'; // Import CSS
 
 interface Verse {
   id: string;
@@ -16,39 +19,42 @@ interface Verse {
   kjv: string;
 }
 
+interface UserProfile {
+  user_id: string;
+  username: string | null;
+  avatar: string | null;
+}
+
 function VersePageClient({
   verse,
   prevVerse,
   nextVerse,
+  userProfile,
   params,
 }: {
-  verse: Verse;
+  verse: Verse | null;
   prevVerse: { book: string; chapter: number; verse: number } | null;
   nextVerse: { book: string; chapter: number; verse: number } | null;
+  userProfile: UserProfile | null;
   params: { book: string; chapter: string; verse: string };
 }) {
   const [isDarkMode, setIsDarkMode] = useState(false);
 
-  // Check for dark class on html element and manage bg classes
-  useEffect(() => {
+  // Memoized dark mode checker
+  const checkDarkMode = useCallback(() => {
     const container = document.querySelector('.bg-container');
-    const checkDarkMode = () => {
-      const isDark = document.documentElement.classList.contains('dark');
-      setIsDarkMode(isDark);
-      if (container) {
-        if (isDark) {
-          container.classList.remove('bg-gray-100');
-          container.classList.add('bg-black');
-        } else {
-          container.classList.remove('bg-black');
-          container.classList.add('bg-gray-100');
-        }
-      }
-    };
+    const isDark = document.documentElement.classList.contains('dark');
+    setIsDarkMode(isDark);
+    if (container) {
+      container.classList.toggle('bg-gray-100', !isDark);
+      container.classList.toggle('bg-black', isDark);
+    }
+  }, []);
 
+  // Handle dark mode changes
+  useEffect(() => {
     checkDarkMode(); // Initial check
 
-    // Listen for changes to the class
     const observer = new MutationObserver(checkDarkMode);
     observer.observe(document.documentElement, {
       attributes: true,
@@ -56,32 +62,41 @@ function VersePageClient({
     });
 
     return () => observer.disconnect();
-  }, []);
+  }, [checkDarkMode]);
 
-  // Toggle dark mode for testing
-  const toggleDarkMode = () => {
-    if (isDarkMode) {
-      document.documentElement.classList.remove('dark');
-    } else {
-      document.documentElement.classList.add('dark');
-    }
-    setIsDarkMode(!isDarkMode);
-  };
+  // Handle invalid verse
+  if (!verse) {
+    return (
+      <div className="min-h-screen bg-container py-8 px-4 flex items-center justify-center">
+        <p className="text-gray-800 dark:text-gray-100 text-lg">
+          Verse not found. Please try another verse.
+        </p>
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen bg-container py-8 px-4">
-      <div className="max-w-4xl mx-auto">
-        <h1 className="text-3xl font-bold text-gray-800 mb-8 text-center">
+    <div className="min-h-screen bg-container py-8 px-4" role="main">
+      <div className="max-w-4xl mx-auto space-y-6">
+        <h1
+          className="text-3xl font-bold mb-8 text-center"
+          aria-label={`${verse.book} ${verse.chapter}:${verse.verse}`}
+        >
           {verse.book} {verse.chapter}:{verse.verse}
         </h1>
         <VerseCard verse={verse} />
-        <InterpretationSection verseId={verse.id} />
+        <InterpretationSection
+          verseId={verse.id}
+          userProfile={userProfile}
+          onSuccess={() => toast.success('Insight submitted successfully!', { theme: isDarkMode ? 'dark' : 'light' })}
+        />
+        <InboundReferences verseId={verse.id} />
         <Navigation
           prevVerse={prevVerse}
           nextVerse={nextVerse}
           currentBook={params.book}
         />
-        
+        <ToastContainer position="top-right" autoClose={3000} theme={isDarkMode ? 'dark' : 'light'} />
       </div>
     </div>
   );

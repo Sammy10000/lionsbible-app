@@ -30,10 +30,11 @@ export default async function ProfilePage({ params }: { params: { username: stri
     redirect(`/users/@${encodedUsername}`);
   }
 
+  // Modified query to use ilike for case-insensitive matching
   const { data: profileData, error } = await supabase
     .from('user_profiles')
     .select('*')
-    .eq('username', cleanUsername)
+    .ilike('username', cleanUsername)
     .maybeSingle();
 
   if (!profileData || error) {
