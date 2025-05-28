@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react';
 import { createClient } from '@/utils/supabase/client';
 import { toast } from 'react-toastify';
+import sanitizeHtml from 'sanitize-html';
 import { Counts } from './InterpretationSection';
 import { Reply, ReplyCounts } from './Replies';
 
@@ -60,6 +61,21 @@ export default function InterpretationForm({
   const [error, setError] = useState<string | null>(null);
   const supabase = createClient();
 
+  const sanitizeInput = (input: string): string => {
+    return sanitizeHtml(input, {
+      allowedTags: [],
+      allowedAttributes: {},
+      allowedClasses: {},
+      textFilter: (text) => text,
+      disallowedTagsMode: 'discard',
+    }).trim();
+  };
+
+  const isValidText = (input: string): boolean => {
+    const codePattern = /[<>{};`'"\\\/]|(\b(function|eval|alert|script|SELECT|INSERT|DELETE|DROP|UNION|EXEC|DECLARE|CREATE|ALTER)\b)/i;
+    return !codePattern.test(input);
+  };
+
   useEffect(() => {
     fetchChapters(referenceInput.book);
   }, [referenceInput.book, fetchChapters]);
@@ -95,6 +111,17 @@ export default function InterpretationForm({
       return;
     }
 
+    const sanitizedReferenceText = sanitizeInput(referenceInput.reference_text);
+    if (!isValidText(sanitizedReferenceText)) {
+      setError('Reference text contains invalid characters or code.');
+      toast.error('Reference text contains invalid characters or code.', {
+        toastId: 'reference-code-error',
+        theme: 'light',
+        autoClose: 5000,
+      });
+      return;
+    }
+
     for (let v = referenceInput.fromVerse; v <= referenceInput.toVerse; v++) {
       const { data, error: verseError } = await supabase
         .from('verses')
@@ -120,7 +147,7 @@ export default function InterpretationForm({
         ? `[${referenceInput.book} ${referenceInput.chapter}:${referenceInput.fromVerse}]`
         : `[${referenceInput.book} ${referenceInput.chapter}:${referenceInput.fromVerse}-${referenceInput.toVerse}]`;
 
-    setInterpretationText((prev) => `${prev} ${referenceLink} (${referenceInput.reference_text})`.trim());
+    setInterpretationText((prev) => `${prev} ${referenceLink} (${sanitizedReferenceText})`.trim());
     setIsModalOpen(false);
     setReferenceInput({ book: '', chapter: 0, fromVerse: 0, toVerse: 0, reference_text: '' });
     setError(null);
@@ -137,6 +164,16 @@ export default function InterpretationForm({
     if (!user) {
       toast.error('Please log in to add an interpretation.', {
         toastId: 'auth-error',
+        theme: 'light',
+        autoClose: 5000,
+      });
+      return;
+    }
+
+    const sanitizedText = sanitizeInput(interpretationText);
+    if (!isValidText(sanitizedText)) {
+      toast.error('Interpretation contains invalid characters or code.', {
+        toastId: 'interpretation-code-error',
         theme: 'light',
         autoClose: 5000,
       });
@@ -161,15 +198,15 @@ export default function InterpretationForm({
     }
 
     if (existingInterpretation) {
-      toast.error('You’ve already shared an interpretation for this verse. You can now add replies.', {
+      toast.error('You’ve already shared an interpretation for this verse. You can only add replies.', {
         toastId: 'existing-interpretation',
         theme: 'light',
-        autoClose: 5000,
+        autoClose: 7000,
       });
       return;
     }
 
-    const words = interpretationText.trim().split(/\s+/).filter((word) => word.length > 0);
+    const words = sanitizedText.trim().split(/\s+/).filter((word) => word.length > 0);
     if (words.length < 12) {
       toast.error('Interpretation must be at least 12 words.', {
         toastId: 'word-count-error',
@@ -184,7 +221,7 @@ export default function InterpretationForm({
       .insert({
         verse_id: verseId,
         user_id: user.id,
-        text: interpretationText,
+        text: sanitizedText,
         is_hidden: false,
       })
       .select('id')
@@ -221,7 +258,7 @@ export default function InterpretationForm({
     const referenceRegex = /\[([^\]]+)\]\s*\(([^)]+)\)/g;
     const references: { book: string; chapter: number; verse: number; reference_text: string }[] = [];
     let match;
-    while ((match = referenceRegex.exec(interpretationText)) !== null) {
+    while ((match = referenceRegex.exec(sanitizedText)) !== null) {
       const [book, chapterVerse] = match[1].split(' ');
       let chapter: number, fromVerse: number, toVerse: number;
       if (chapterVerse.includes('-')) {
@@ -241,7 +278,7 @@ export default function InterpretationForm({
           book,
           chapter,
           verse,
-          reference_text: match[2],
+          reference_text: sanitizeInput(match[2]),
         });
       }
     }
@@ -271,7 +308,7 @@ export default function InterpretationForm({
     setInterpretations((prev) => [
       {
         id: data.id,
-        interpretation_text: interpretationText,
+        interpretation_text: sanitizedText,
         user_id: user.id,
         username: userProfile?.username || 'Anonymous',
         avatar: userProfile?.avatar || null,
@@ -290,175 +327,175 @@ export default function InterpretationForm({
 
   return (
     <>
-    <form onSubmit={handleInterpretationSubmit} className="space-y-6 w-full max-w-full overflow-x-hidden m-2 sm:m-4">
+      <form onSubmit={handleInterpretationSubmit} className="space-y-6 w-full max-w-full overflow-x-hidden m-2 sm:m-4">
         <label htmlFor={`interpretation-${verseId}`} className="block text-gray-600 text-sm sm:text-base">
-        Your Interpretations
+          Your Interpretations
         </label>
         <textarea
-        id={`interpretation-${verseId}`}
-        value={interpretationText}
-        onChange={(e) => setInterpretationText(e.target.value)}
-        className="w-[95%] p-2 ms-2 border border-gray-300 rounded bg-white text-gray-600 text-sm sm:text-base focus:outline-none focus:ring-2 focus:ring-teal-500 ring-offset-2 max-w-full overflow-x-hidden break-words code-text m-2"
-        aria-label={`Interpretation for verse ${verseId}`}
-        rows={4}
+          id={`interpretation-${verseId}`}
+          value={interpretationText}
+          onChange={(e) => setInterpretationText(e.target.value)}
+          className="w-[93%] p-2 ms-2 border border-gray-300 rounded bg-white text-gray-600 text-sm sm:text-base focus:outline-none focus:ring-2 focus:ring-teal-500 ring-offset-2 max-w-full overflow-x-hidden break-words m-2"
+          aria-label={`Interpretation for verse ${verseId}`}
+          rows={4}
         />
         <div className="flex flex-col sm:flex-row sm:space-x-4 space-y-2 sm:space-y-0">
-        <button
+          <button
             type="button"
             onClick={() => setIsModalOpen(true)}
-            className="bg-[#207788] text-white px-4 py-2 rounded hover:bg-[#1a5f6e] text-sm sm:text-base focus:ring-2 focus:ring-teal-500 ring-offset-2 m-2"
-        >
+            className="bg-[#207788] text-white px-4 py-2 w-[92%] sm:w-auto rounded hover:bg-[#1a5f6e] text-sm sm:text-base focus:ring-2 focus:ring-teal-500 ring-offset-2 m-2"
+          >
             Add Scripture Reference
-        </button>
-        <button
+          </button>
+          <button
             type="submit"
-            className="bg-[#207788] text-white px-4 py-2 rounded hover:bg-[#1a5f6e] text-sm sm:text-base focus:ring-2 focus:ring-teal-500 ring-offset-2 m-2"
-        >
+            className="bg-[#207788] text-white px-4 py-2 w-[92%] sm:w-auto rounded hover:bg-[#1a5f6e] text-sm sm:text-base focus:ring-2 focus:ring-teal-500 ring-offset-2 m-2"
+          >
             Submit
-        </button>
+          </button>
         </div>
-    </form>
+      </form>
 
-    {isModalOpen && (
+      {isModalOpen && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 overflow-x-hidden">
-        <div className="bg-white p-6 rounded-lg shadow-md w-full max-w-sm mx-2 sm:max-w-md sm:mx-4 overflow-x-hidden m-2 sm:m-4">
+          <div className="bg-white p-6 rounded-lg shadow-md w-full max-w-sm mx-2 sm:max-w-md sm:mx-4 overflow-x-hidden m-2 sm:m-4">
             <h3 className="text-xl sm:text-2xl font-extrabold text-gray-800 mb-4">Add Scripture Reference</h3>
-            {error && <p className="text-red-500 mb-4 text-sm break-words code-text">{error}</p>}
+            {error && <p className="text-red-500 mb-4 text-sm break-words">{error}</p>}
             <div className="space-y-6 text-gray-600 max-w-full">
-            <div>
+              <div>
                 <label htmlFor="book" className="block text-gray-600 text-sm">Book</label>
                 <select
-                id="book"
-                value={referenceInput.book}
-                onChange={(e) =>
+                  id="book"
+                  value={referenceInput.book}
+                  onChange={(e) =>
                     setReferenceInput({
-                    ...referenceInput,
-                    book: e.target.value,
-                    chapter: 0,
-                    fromVerse: 0,
-                    toVerse: 0,
-                    reference_text: '',
+                      ...referenceInput,
+                      book: e.target.value,
+                      chapter: 0,
+                      fromVerse: 0,
+                      toVerse: 0,
+                      reference_text: '',
                     })
-                }
-                className="w-full p-2 border border-gray-300 rounded bg-white text-gray-600 text-sm max-w-full focus:ring-2 focus:ring-teal-500 ring-offset-2 m-2"
-                aria-label="Select a book"
+                  }
+                  className="w-full p-2 border border-gray-300 rounded bg-white text-gray-600 text-sm max-w-full focus:ring-2 focus:ring-teal-500 ring-offset-2 m-2"
+                  aria-label="Select a book"
                 >
-                <option value="">Select a book</option>
-                {books.map((book) => (
+                  <option value="">Select a book</option>
+                  {books.map((book) => (
                     <option key={book} value={book}>{book}</option>
-                ))}
+                  ))}
                 </select>
-            </div>
-            <div>
+              </div>
+              <div>
                 <label htmlFor="chapter" className="block text-gray-600 text-sm">Chapter</label>
                 <select
-                id="chapter"
-                value={referenceInput.chapter}
-                onChange={(e) =>
+                  id="chapter"
+                  value={referenceInput.chapter}
+                  onChange={(e) =>
                     setReferenceInput({
-                    ...referenceInput,
-                    chapter: parseInt(e.target.value) || 0,
-                    fromVerse: 0,
-                    toVerse: 0,
+                      ...referenceInput,
+                      chapter: parseInt(e.target.value) || 0,
+                      fromVerse: 0,
+                      toVerse: 0,
                     })
-                }
-                className="w-full p-2 border border-gray-300 rounded bg-white text-gray-600 text-sm max-w-full focus:ring-2 focus:ring-teal-500 ring-offset-2 m-2"
-                disabled={!referenceInput.book}
-                aria-label="Select a chapter"
+                  }
+                  className="w-full p-2 border border-gray-300 rounded bg-white text-gray-600 text-sm max-w-full focus:ring-2 focus:ring-teal-500 ring-offset-2 m-2"
+                  disabled={!referenceInput.book}
+                  aria-label="Select a chapter"
                 >
-                <option value={0}>Select a chapter</option>
-                {referenceInput.book &&
+                  <option value={0}>Select a chapter</option>
+                  {referenceInput.book &&
                     chapters[referenceInput.book]?.map((chapter) => (
-                    <option key={chapter} value={chapter}>{chapter}</option>
+                      <option key={chapter} value={chapter}>{chapter}</option>
                     ))}
                 </select>
-            </div>
-            <div className="flex flex-col sm:flex-row sm:space-x-4 space-y-2 sm:space-y-0 m-2">
+              </div>
+              <div className="flex flex-col sm:flex-row sm:space-x-4 space-y-2 sm:space-y-0 m-2">
                 <div className="flex-1">
-                <label htmlFor="from-verse" className="block text-gray-600 text-sm">From Verse</label>
-                <select
+                  <label htmlFor="from-verse" className="block text-gray-600 text-sm">From Verse</label>
+                  <select
                     id="from-verse"
                     value={referenceInput.fromVerse}
                     onChange={(e) =>
-                    setReferenceInput({
+                      setReferenceInput({
                         ...referenceInput,
                         fromVerse: parseInt(e.target.value) || 0,
                         toVerse: referenceInput.toVerse < parseInt(e.target.value) ? 0 : referenceInput.toVerse,
-                    })
+                      })
                     }
                     className="w-full p-2 border border-gray-300 rounded bg-white text-gray-600 text-sm max-w-full focus:ring-2 focus:ring-teal-500 ring-offset-2 m-2"
                     disabled={!referenceInput.book || !referenceInput.chapter}
                     aria-label="Select starting verse"
-                >
+                  >
                     <option value={0}>Select start verse</option>
                     {referenceInput.book &&
-                    referenceInput.chapter &&
-                    verses[`${referenceInput.book}-${referenceInput.chapter}`]?.map((verse) => (
+                      referenceInput.chapter &&
+                      verses[`${referenceInput.book}-${referenceInput.chapter}`]?.map((verse) => (
                         <option key={verse} value={verse}>{verse}</option>
-                    ))}
-                </select>
+                      ))}
+                  </select>
                 </div>
                 <div className="flex-1">
-                <label htmlFor="to-verse" className="block text-gray-600 text-sm">To Verse</label>
-                <select
+                  <label htmlFor="to-verse" className="block text-gray-600 text-sm">To Verse</label>
+                  <select
                     id="to-verse"
                     value={referenceInput.toVerse}
                     onChange={(e) =>
-                    setReferenceInput({
+                      setReferenceInput({
                         ...referenceInput,
                         toVerse: parseInt(e.target.value) || 0,
-                    })
+                      })
                     }
                     className="w-full p-2 border border-gray-300 rounded bg-white text-gray-600 text-sm max-w-full focus:ring-2 focus:ring-teal-500 ring-offset-2 m-2"
                     disabled={!referenceInput.book || !referenceInput.chapter || !referenceInput.fromVerse}
                     aria-label="Select ending verse"
-                >
+                  >
                     <option value={0}>Select end verse</option>
                     {referenceInput.book &&
-                    referenceInput.chapter &&
-                    referenceInput.fromVerse &&
-                    verses[`${referenceInput.book}-${referenceInput.chapter}`]
+                      referenceInput.chapter &&
+                      referenceInput.fromVerse &&
+                      verses[`${referenceInput.book}-${referenceInput.chapter}`]
                         ?.filter((verse) => verse >= referenceInput.fromVerse)
                         ?.map((verse) => (
-                        <option key={verse} value={verse}>{verse}</option>
+                          <option key={verse} value={verse}>{verse}</option>
                         ))}
-                </select>
+                  </select>
                 </div>
-            </div>
-            <div>
+              </div>
+              <div>
                 <label htmlFor="reference-text" className="block text-gray-600 text-sm">Why is this relevant?</label>
                 <textarea
-                id="reference-text"
-                value={referenceInput.reference_text}
-                onChange={(e) => setReferenceInput({ ...referenceInput, reference_text: e.target.value })}
-                className="w-full p-2 border border-gray-300 rounded bg-white text-gray-600 text-sm max-w-full overflow-x-hidden break-words code-text focus:ring-2 focus:ring-teal-500 ring-offset-2 m-2"
-                rows={3}
-                aria-label="Explain why this reference is relevant"
+                  id="reference-text"
+                  value={referenceInput.reference_text}
+                  onChange={(e) => setReferenceInput({ ...referenceInput, reference_text: e.target.value })}
+                  className="w-full p-2 border border-gray-300 rounded bg-white text-gray-600 text-sm max-w-full overflow-x-hidden break-words focus:ring-2 focus:ring-teal-500 ring-offset-2 m-2"
+                  rows={3}
+                  aria-label="Explain why this reference is relevant"
                 />
-            </div>
-            <div className="flex flex-col sm:flex-row sm:space-x-4 space-y-2 sm:space-y-0 m-2">
+              </div>
+              <div className="flex flex-col sm:flex-row sm:space-x-4 space-y-2 sm:space-y-0 m-2">
                 <button
-                type="button"
-                onClick={handleAddReference}
-                className="bg-[#207788] text-white px-4 py-2 rounded hover:bg-[#1a5f6e] text-sm focus:ring-2 focus:ring-teal-500 ring-offset-2 m-2"
+                  type="button"
+                  onClick={handleAddReference}
+                  className="bg-[#207788] text-white px-4 py-2 rounded hover:bg-[#1a5f6e] text-sm focus:ring-2 focus:ring-teal-500 ring-offset-2 m-2"
                 >
-                Add Reference
+                  Add Reference
                 </button>
                 <button
-                type="button"
-                onClick={() => {
+                  type="button"
+                  onClick={() => {
                     setIsModalOpen(false);
                     setError(null);
-                }}
-                className="bg-gray-300 text-gray-800 px-4 py-2 rounded hover:bg-gray-400 text-sm focus:ring-2 focus:ring-gray-500 ring-offset-2 m-2"
+                  }}
+                  className="bg-gray-300 text-gray-800 px-4 py-2 rounded hover:bg-gray-400 text-sm focus:ring-2 focus:ring-gray-500 ring-offset-2 m-2"
                 >
-                Cancel
+                  Cancel
                 </button>
+              </div>
             </div>
-            </div>
+          </div>
         </div>
-        </div>
-    )}
+      )}
     </>
   );
 }

@@ -2,8 +2,10 @@
 import { useState, useCallback } from 'react';
 import { FaSortAmountUpAlt, FaFlag, FaTrash, FaUser, FaReply, FaChevronDown } from 'react-icons/fa';
 import { createClient } from '@/utils/supabase/client';
-import { toast } from 'react-toastify';
 import { Dialog, Transition } from '@headlessui/react';
+import { toast } from 'react-toastify';
+import sanitizeHtml from 'sanitize-html';
+import Replies from './Replies';
 
 interface Reply {
   id: string;
@@ -50,6 +52,7 @@ interface Props {
   setReplyCounts: (fn: (prev: { [key: string]: ReplyCounts }) => { [key: string]: ReplyCounts }) => void;
   setInterpretations: (fn: (prev: InterpretationType[]) => InterpretationType[]) => void;
   renderInterpretationText: (text: string) => (React.ReactElement | string)[];
+  className?: string;
 }
 
 export default function Interpretation({
@@ -66,6 +69,7 @@ export default function Interpretation({
   setReplyCounts,
   setInterpretations,
   renderInterpretationText,
+  className,
 }: Props) {
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const [reportReason, setReportReason] = useState<'spam' | 'blasphemy' | 'offensive' | ''>('');
@@ -76,17 +80,30 @@ export default function Interpretation({
   const [replyText, setReplyText] = useState('');
   const supabase = createClient();
 
+  const sanitizeInput = (input: string): string => {
+    return sanitizeHtml(input, {
+      allowedTags: [],
+      allowedAttributes: {},
+      allowedClasses: {},
+      textFilter: (text) => text,
+      disallowedTagsMode: 'discard',
+    }).trim();
+  };
+
+  const isValidText = (input: string): boolean => {
+    const codePattern = /[<>{};`'"\\\/]|(\b(function|eval|alert|script|SELECT|INSERT|DELETE|DROP|UNION|EXEC|DECLARE|CREATE|ALTER)\b)/i;
+    return !codePattern.test(input);
+  };
+
   const handleUpvoteClick = useCallback(async (id: string, type: 'interpretation' | 'reply') => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
-      if (!toast.isActive(`upvote-auth-${id}`)) {
-        toast.error('Please log in to upvote.', { id: `upvote-auth-${id}`, theme: 'light', autoClose: 3000 });
-      }
+      toast.error('Please log in to upvote', { toastId: 'upvote-login-error', theme: 'light', autoClose: 5000 });
       return;
     }
 
     if (type === 'interpretation') {
-      const { data: existingUpvote, error: checkError } = await supabase
+      const { data: existingUpvote } = await supabase
         .from('interpretation_upvotes')
         .select('id')
         .eq('interpretation_id', id)
@@ -94,60 +111,44 @@ export default function Interpretation({
         .single();
 
       if (existingUpvote) {
-        if (!toast.isActive(`upvote-exists-${id}`)) {
-          toast.info('You have already upvoted this interpretation.', { id: `upvote-exists-${id}`, theme: 'light', autoClose: 3000 });
-        }
+        toast.error('You have already upvoted this interpretation', { toastId: 'upvote-duplicate-error', theme: 'light', autoClose: 5000 });
         return;
       }
 
-      if (checkError && checkError.code !== 'PGRST116') {
-        if (!toast.isActive(`upvote-check-${id}`)) {
-          toast.error(`Failed to check upvote: ${checkError.message}`, { id: `upvote-check-${id}`, theme: 'light', autoClose: 5000 });
-        }
-        return;
-      }
-
-      const { error: upvoteError } = await supabase
+      await supabase
         .from('interpretation_upvotes')
         .insert({ interpretation_id: id, user_id: user.id });
 
-      if (upvoteError) {
-        if (!toast.isActive(`upvote-insert-${id}`)) {
-          toast.error(`Failed to record upvote: ${upvoteError.message}`, { id: `upvote-insert-${id}`, theme: 'light', autoClose: 5000 });
-        }
-        return;
-      }
+      const { data: currentCount } = await supabase
+        .from('interpretation_counts')
+        .select('upvote_count, reply_count, report_count')
+        .eq('interpretation_id', id)
+        .single();
 
-      const { error: countError } = await supabase
+      const newUpvoteCount = (currentCount?.upvote_count || 0) + 1;
+      await supabase
         .from('interpretation_counts')
         .upsert(
           {
             interpretation_id: id,
-            reply_count: counts[id]?.reply_count || 0,
-            upvote_count: (counts[id]?.upvote_count || 0) + 1,
-            report_count: counts[id]?.report_count || 0,
+            upvote_count: newUpvoteCount,
+            reply_count: currentCount?.reply_count || 0,
+            report_count: currentCount?.report_count || 0,
           },
           { onConflict: 'interpretation_id' }
         );
-
-      if (countError) {
-        if (!toast.isActive(`upvote-count-${id}`)) {
-          toast.error(`Failed to update upvote count: ${countError.message}`, { id: `upvote-count-${id}`, theme: 'light', autoClose: 5000 });
-        }
-        return;
-      }
 
       setCounts((prev) => ({
         ...prev,
         [id]: {
           interpretation_id: id,
+          upvote_count: newUpvoteCount,
           reply_count: prev[id]?.reply_count || 0,
-          upvote_count: (prev[id]?.upvote_count || 0) + 1,
           report_count: prev[id]?.report_count || 0,
         },
       }));
     } else {
-      const { data: existingUpvote, error: checkError } = await supabase
+      const { data: existingUpvote } = await supabase
         .from('reply_upvotes')
         .select('id')
         .eq('reply_id', id)
@@ -155,31 +156,15 @@ export default function Interpretation({
         .single();
 
       if (existingUpvote) {
-        if (!toast.isActive(`upvote-exists-${id}`)) {
-          toast.info('You have already upvoted this reply.', { id: `upvote-exists-${id}`, theme: 'light', autoClose: 3000 });
-        }
+        toast.error('You have already upvoted this reply', { toastId: 'reply-upvote-duplicate-error', theme: 'light', autoClose: 5000 });
         return;
       }
 
-      if (checkError && checkError.code !== 'PGRST116') {
-        if (!toast.isActive(`upvote-check-${id}`)) {
-          toast.error(`Failed to check upvote: ${checkError.message}`, { id: `upvote-check-${id}`, theme: 'light', autoClose: 5000 });
-        }
-        return;
-      }
-
-      const { error: upvoteError } = await supabase
+      await supabase
         .from('reply_upvotes')
         .insert({ reply_id: id, user_id: user.id });
 
-      if (upvoteError) {
-        if (!toast.isActive(`upvote-insert-${id}`)) {
-          toast.error(`Failed to record upvote: ${upvoteError.message}`, { id: `upvote-insert-${id}`, theme: 'light', autoClose: 5000 });
-        }
-        return;
-      }
-
-      const { error: countError } = await supabase
+      await supabase
         .from('reply_counts')
         .upsert(
           {
@@ -190,13 +175,6 @@ export default function Interpretation({
           { onConflict: 'reply_id' }
         );
 
-      if (countError) {
-        if (!toast.isActive(`upvote-count-${id}`)) {
-          toast.error(`Failed to update upvote count: ${countError.message}`, { id: `upvote-count-${id}`, theme: 'light', autoClose: 5000 });
-        }
-        return;
-      }
-
       setReplyCounts((prev) => ({
         ...prev,
         [id]: {
@@ -205,10 +183,6 @@ export default function Interpretation({
           report_count: prev[id]?.report_count || 0,
         },
       }));
-    }
-
-    if (!toast.isActive(`upvote-success-${id}`)) {
-      toast.success('Upvote submitted!', { id: `upvote-success-${id}`, theme: 'light', autoClose: 3000 });
     }
   }, [counts, replyCounts, setCounts, setReplyCounts]);
 
@@ -221,161 +195,131 @@ export default function Interpretation({
   const handleReportSubmit = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      if (!toast.isActive('report-auth')) {
-        toast.error('Please log in to report.', { id: 'report-auth', theme: 'light', autoClose: 3000 });
-      }
+    if (!user || !reportReason || !currentId || !currentType) {
+      toast.error('Please select a report reason', { toastId: 'report-error', theme: 'light', autoClose: 5000 });
       setIsReportModalOpen(false);
       return;
     }
 
-    if (!reportReason) {
-      if (!toast.isActive('report-reason')) {
-        toast.error('Please select a reason.', { id: 'report-reason', theme: 'light', autoClose: 3000 });
-      }
+    const sanitizedExplanation = sanitizeInput(reportExplanation);
+    if (!isValidText(sanitizedExplanation)) {
+      toast.error('Report explanation contains invalid characters or code.', { toastId: 'report-code-error', theme: 'light', autoClose: 5000 });
       return;
     }
 
-    const words = reportExplanation.trim().split(/\s+/).filter((word) => word.length > 0);
+    const words = sanitizedExplanation.trim().split(/\s+/).filter((word) => word.length > 0);
     if (words.length > 20) {
-      if (!toast.isActive('report-explanation')) {
-        toast.error('Explanation cannot exceed 20 words.', { id: 'report-explanation', theme: 'light', autoClose: 3000 });
-      }
-      return;
-    }
-
-    if (!currentId || !currentType) {
-      if (!toast.isActive('report-target')) {
-        toast.error('Invalid report target.', { id: 'report-target', theme: 'light', autoClose: 3000 });
-      }
+      toast.error('Report explanation must be 20 words or less', { toastId: 'report-length-error', theme: 'light', autoClose: 5000 });
       return;
     }
 
     const table = currentType === 'interpretation' ? 'interpretation_flags' : 'reply_flags';
     const idField = currentType === 'interpretation' ? 'interpretation_id' : 'reply_id';
+    const countTable = currentType === 'interpretation' ? 'interpretation_counts' : 'reply_counts';
+    const countIdField = currentType === 'interpretation' ? 'interpretation_id' : 'reply_id';
 
-    const { error: flagError } = await supabase
+    const { data: existingFlag } = await supabase
+      .from(table)
+      .select('id')
+      .eq(idField, currentId)
+      .eq('flagged_by', user.id)
+      .single();
+
+    if (existingFlag) {
+      toast.error(`You have already reported this ${currentType}`, { toastId: 'report-duplicate-error', theme: 'light', autoClose: 5000 });
+      setIsReportModalOpen(false);
+      setReportReason('');
+      setReportExplanation('');
+      setCurrentId(null);
+      setCurrentType(null);
+      return;
+    }
+
+    await supabase
       .from(table)
       .insert({
         [idField]: currentId,
         flagged_by: user.id,
         reason: reportReason,
-        explanation: reportExplanation || null,
+        explanation: sanitizedExplanation || null,
       });
 
-    if (flagError) {
-      if (flagError.code === '23505') {
-        if (!toast.isActive(`report-exists-${currentId}`)) {
-          toast.info('You have already reported this item.', { id: `report-exists-${currentId}`, theme: 'light', autoClose: 3000 });
-        }
-      } else {
-        if (!toast.isActive(`report-error-${currentId}`)) {
-          toast.error(`Failed to submit report: ${flagError.message}`, { id: `report-error-${currentId}`, theme: 'light', autoClose: 5000 });
-        }
-      }
-      setIsReportModalOpen(false);
-      return;
-    }
-
-    let newReportCount: number;
     if (currentType === 'interpretation') {
-      newReportCount = (counts[currentId]?.report_count || 0) + 1;
-      const { error: countError } = await supabase
+      const { data: currentCount } = await supabase
+        .from('interpretation_counts')
+        .select('report_count, reply_count, upvote_count')
+        .eq('interpretation_id', currentId)
+        .single();
+
+      const newReportCount = (currentCount?.report_count || 0) + 1;
+      await supabase
         .from('interpretation_counts')
         .upsert(
           {
             interpretation_id: currentId,
-            reply_count: counts[currentId]?.reply_count || 0,
-            upvote_count: counts[currentId]?.upvote_count || 0,
             report_count: newReportCount,
+            reply_count: currentCount?.reply_count || 0,
+            upvote_count: currentCount?.upvote_count || 0,
           },
           { onConflict: 'interpretation_id' }
         );
-
-      if (countError) {
-        if (!toast.isActive(`report-count-${currentId}`)) {
-          toast.error(`Failed to update report count: ${countError.message}`, { id: `report-count-${currentId}`, theme: 'light', autoClose: 5000 });
-        }
-        setIsReportModalOpen(false);
-        return;
-      }
 
       setCounts((prev) => ({
         ...prev,
         [currentId]: {
           interpretation_id: currentId,
+          report_count: newReportCount,
           reply_count: prev[currentId]?.reply_count || 0,
           upvote_count: prev[currentId]?.upvote_count || 0,
-          report_count: newReportCount,
         },
       }));
 
       if (newReportCount >= 10) {
-        const { error: hideError } = await supabase
+        await supabase
           .from('interpretations')
           .update({ is_deleted: true })
           .eq('id', currentId);
 
-        if (hideError) {
-          if (!toast.isActive(`hide-${currentId}`)) {
-            toast.error(`Failed to hide interpretation: ${hideError.message}`, { id: `hide-${currentId}`, theme: 'light', autoClose: 5000 });
-          }
-        } else {
-          setInterpretations((prev) => prev.filter((int) => int.id !== currentId));
-          if (!toast.isActive(`hide-success-${currentId}`)) {
-            toast.success('Interpretation hidden due to reports.', { id: `hide-success-${currentId}`, theme: 'light', autoClose: 3000 });
-          }
-        }
+        setInterpretations((prev) => prev.filter((int) => int.id !== currentId));
       }
     } else {
-      newReportCount = (replyCounts[currentId]?.report_count || 0) + 1;
-      const { error: countError } = await supabase
+      const { data: currentCount } = await supabase
+        .from('reply_counts')
+        .select('report_count, upvote_count')
+        .eq('reply_id', currentId)
+        .single();
+
+      const newReportCount = (currentCount?.report_count || 0) + 1;
+      await supabase
         .from('reply_counts')
         .upsert(
           {
             reply_id: currentId,
-            upvote_count: replyCounts[currentId]?.upvote_count || 0,
             report_count: newReportCount,
+            upvote_count: currentCount?.upvote_count || 0,
           },
           { onConflict: 'reply_id' }
         );
-
-      if (countError) {
-        if (!toast.isActive(`reply-report-${currentId}`)) {
-          toast.error(`Failed to update reply report count: ${countError.message}`, { id: `reply-report-${currentId}`, theme: 'light', autoClose: 5000 });
-        }
-        setIsReportModalOpen(false);
-        return;
-      }
 
       setReplyCounts((prev) => ({
         ...prev,
         [currentId]: {
           reply_id: currentId,
-          upvote_count: prev[currentId]?.upvote_count || 0,
           report_count: newReportCount,
+          upvote_count: prev[currentId]?.upvote_count || 0,
         },
       }));
 
       if (newReportCount >= 5) {
-        const { error: hideError } = await supabase
+        await supabase
           .from('replies')
-          .update({ is_deleted: true })
+          .update({ is_hidden: true })
           .eq('id', currentId);
 
-        if (hideError) {
-          if (!toast.isActive(`reply-hide-${currentId}`)) {
-            toast.error(`Failed to hide reply: ${hideError.message}`, { id: `reply-hide-${currentId}`, theme: 'light', autoClose: 5000 });
-          }
-        } else {
-          setReplies((prev) => ({
-            ...prev,
-            [interpretation.id]: prev[interpretation.id]?.filter((reply) => reply.id !== currentId) || [],
-          }));
-          if (!toast.isActive(`reply-hidden-${currentId}`)) {
-            toast.success('Reply hidden due to reports.', { id: `reply-hidden-${currentId}`, theme: 'light', autoClose: 3000 });
-          }
-        }
+        setReplies((prev) => ({
+          ...prev,
+          [interpretation.id]: prev[interpretation.id]?.filter((reply) => reply.id !== currentId) || [],
+        }));
       }
     }
 
@@ -384,40 +328,20 @@ export default function Interpretation({
     setReportExplanation('');
     setCurrentId(null);
     setCurrentType(null);
-
-    if (!toast.isActive(`report-success-${currentId || 'generic'}`)) {
-      toast.success('Report submitted!', { id: `report-success-${currentId || 'generic'}`, theme: 'light', autoClose: 3000 });
-    }
   }, [currentId, currentType, reportReason, reportExplanation, counts, replyCounts, setCounts, setReplyCounts, setInterpretations, setReplies, interpretation.id]);
 
   const handleDeleteInterpretation = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      if (!toast.isActive(`delete-auth-${interpretation.id}`)) {
-        toast.error('Please log in to delete.', { id: `delete-auth-${interpretation.id}`, theme: 'light', autoClose: 3000 });
-      }
+    if (!user || user.id !== interpretation.user_id) {
+      toast.error('You are not authorized to delete this interpretation', { toastId: 'delete-auth-error', theme: 'light', autoClose: 5000 });
       return;
     }
 
-    if (user.id !== interpretation.user_id) {
-      if (!toast.isActive(`delete-perm-${interpretation.id}`)) {
-        toast.error('You can only delete your own interpretation.', { id: `delete-perm-${interpretation.id}`, theme: 'light', autoClose: 3000 });
-      }
-      return;
-    }
-
-    const { error } = await supabase
+    await supabase
       .from('interpretations')
       .update({ is_deleted: true })
       .eq('id', interpretation.id)
       .eq('user_id', user.id);
-
-    if (error) {
-      if (!toast.isActive(`delete-error-${interpretation.id}`)) {
-        toast.error(`Failed to delete: ${error.message}`, { id: `delete-error-${interpretation.id}`, theme: 'light', autoClose: 5000 });
-      }
-      return;
-    }
 
     setInterpretations((prev) => prev.filter((int) => int.id !== interpretation.id));
     setReplies((prev) => {
@@ -430,18 +354,12 @@ export default function Interpretation({
       delete newCounts[interpretation.id];
       return newCounts;
     });
-
-    if (!toast.isActive(`delete-success-${interpretation.id}`)) {
-      toast.success('Interpretation deleted.', { id: `delete-success-${interpretation.id}`, theme: 'light', autoClose: 3000 });
-    }
   }, [interpretation.id, interpretation.user_id, setInterpretations, setReplies, setCounts]);
 
   const handleReplyClick = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
-      if (!toast.isActive('reply-auth')) {
-        toast.error('Please log in to reply.', { id: 'reply-auth', theme: 'light', autoClose: 3000 });
-      }
+      toast.error('Please log in to reply', { toastId: 'reply-login-error', theme: 'light', autoClose: 5000 });
       return;
     }
     setIsReplyModalOpen(true);
@@ -450,352 +368,194 @@ export default function Interpretation({
   const handleReplySubmit = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      if (!toast.isActive('reply-auth')) {
-        toast.error('Please log in to reply.', { id: 'reply-auth', theme: 'light', autoClose: 3000 });
-      }
+    if (!user || !replyText.trim()) {
+      toast.error('Reply cannot be empty', { toastId: 'reply-empty-error', theme: 'light', autoClose: 5000 });
       return;
     }
 
-    if (!replyText.trim()) {
-      if (!toast.isActive('reply-empty')) {
-        toast.error('Reply cannot be empty.', { id: 'reply-empty', theme: 'light', autoClose: 3000 });
-      }
+    const sanitizedReplyText = sanitizeInput(replyText);
+    if (!isValidText(sanitizedReplyText)) {
+      toast.error('Reply contains invalid characters or code.', { toastId: 'reply-code-error', theme: 'light', autoClose: 5000 });
       return;
     }
 
     let finalVerseId = verse_id;
     if (!finalVerseId) {
-      const { data: interpretationData, error: fetchError } = await supabase
+      const { data: interpretationData } = await supabase
         .from('interpretations')
         .select('verse_id')
         .eq('id', interpretation.id)
         .single();
 
-      if (fetchError || !interpretationData) {
-        if (!toast.isActive('verse-fetch')) {
-          toast.error('Failed to fetch verse ID.', { id: 'verse-fetch', theme: 'light', autoClose: 3000 });
-        }
+      if (!interpretationData) {
+        toast.error('Failed to submit reply', { toastId: 'reply-fail-error', theme: 'light', autoClose: 5000 });
         return;
       }
-
       finalVerseId = interpretationData.verse_id;
     }
 
-    const { data: replyData, error: replyError } = await supabase
+    const { data: replyData } = await supabase
       .from('replies')
       .insert({
         interpretation_id: interpretation.id,
         verse_id: finalVerseId,
         user_id: user.id,
-        text: replyText,
+        text: sanitizedReplyText,
         is_hidden: false,
       })
       .select('id, interpretation_id, text, user_id, created_at')
       .single();
 
-    if (replyError) {
-      if (!toast.isActive('reply-submit')) {
-        toast.error(`Failed to submit reply: ${replyError.message}`, { id: 'reply-submit', theme: 'light', autoClose: 5000 });
-      }
-      return;
-    }
+    if (replyData) {
+      const newReply: Reply = {
+        id: replyData.id,
+        interpretation_id: replyData.interpretation_id,
+        text: sanitizedReplyText,
+        user_id: user.id,
+        username: userProfile?.username || 'Anonymous',
+        avatar: userProfile?.avatar || null,
+        created_at: replyData.created_at,
+      };
 
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('username, avatar')
-      .eq('id', user.id)
-      .single();
+      setReplies((prev) => ({
+        ...prev,
+        [interpretation.id]: [...(prev[interpretation.id] || []), newReply].sort(
+          (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+        ),
+      }));
 
-    const newReply: Reply = {
-      id: replyData.id,
-      interpretation_id: replyData.interpretation_id,
-      text: replyData.text,
-      user_id: user.id,
-      username: profile?.username || 'Anonymous',
-      avatar: profile?.avatar || null,
-      created_at: replyData.created_at,
-    };
+      const { data: currentCount } = await supabase
+        .from('interpretation_counts')
+        .select('reply_count, upvote_count, report_count')
+        .eq('interpretation_id', interpretation.id)
+        .single();
 
-    setReplies((prev) => ({
-      ...prev,
-      [interpretation.id]: [...(prev[interpretation.id] || []), newReply].sort(
-        (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-      ),
-    }));
+      const newReplyCount = (currentCount?.reply_count || 0) + 1;
+      await supabase
+        .from('interpretation_counts')
+        .upsert(
+          {
+            interpretation_id: interpretation.id,
+            reply_count: newReplyCount,
+            upvote_count: currentCount?.upvote_count || 0,
+            report_count: currentCount?.report_count || 0,
+          },
+          { onConflict: 'interpretation_id' }
+        );
 
-    const { error: countError } = await supabase
-      .from('interpretation_counts')
-      .upsert(
-        {
+      setCounts((prev) => ({
+        ...prev,
+        [interpretation.id]: {
           interpretation_id: interpretation.id,
-          reply_count: (counts[interpretation.id]?.reply_count || 0) + 1,
-          upvote_count: counts[interpretation.id]?.upvote_count || 0,
-          report_count: counts[interpretation.id]?.report_count || 0,
+          reply_count: newReplyCount,
+          upvote_count: prev[interpretation.id]?.upvote_count || 0,
+          report_count: prev[interpretation.id]?.report_count || 0,
         },
-        { onConflict: 'interpretation_id' }
-      );
-
-    if (countError) {
-      if (!toast.isActive('reply-count')) {
-        toast.error(`Failed to update reply count: ${countError.message}`, { id: 'reply-count', theme: 'light', autoClose: 5000 });
-      }
-      return;
+      }));
     }
-
-    setCounts((prev) => ({
-      ...prev,
-      [interpretation.id]: {
-        interpretation_id: interpretation.id,
-        reply_count: (prev[interpretation.id]?.reply_count || 0) + 1,
-        upvote_count: prev[interpretation.id]?.upvote_count || 0,
-        report_count: prev[interpretation.id]?.report_count || 0,
-      },
-    }));
 
     setReplyText('');
     setIsReplyModalOpen(false);
-
-    if (!toast.isActive(`reply-success-${replyData.id}`)) {
-      toast.success('Reply submitted!', { id: `reply-success-${replyData.id}`, theme: 'light', autoClose: 3000 });
-    }
-  }, [verse_id, replyText, interpretation.id, counts, setReplies, setCounts]);
-
-  const handleDeleteReply = useCallback(async (replyId: string) => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      if (!toast.isActive(`delete-reply-auth-${replyId}`)) {
-        toast.error('Please log in to delete.', { id: `delete-reply-auth-${replyId}`, theme: 'light', autoClose: 3000 });
-      }
-      return;
-    }
-
-    const reply = replies[interpretation.id]?.find((r) => r.id === replyId);
-    if (!reply || user.id !== reply.user_id) {
-      if (!toast.isActive(`delete-reply-perm-${replyId}`)) {
-        toast.error('You can only delete your own reply.', { id: `delete-reply-perm-${replyId}`, theme: 'light', autoClose: 3000 });
-      }
-      return;
-    }
-
-    const { error } = await supabase
-      .from('replies')
-      .update({ is_deleted: true })
-      .eq('id', replyId)
-      .eq('user_id', user.id);
-
-    if (error) {
-      if (!toast.isActive(`delete-reply-${replyId}`)) {
-        toast.error(`Failed to delete reply: ${error.message}`, { id: `delete-reply-${replyId}`, theme: 'light', autoClose: 5000 });
-      }
-      return;
-    }
-
-    setReplies((prev) => ({
-      ...prev,
-      [interpretation.id]: prev[interpretation.id]?.filter((r) => r.id !== replyId) || [],
-    }));
-
-    const { error: countError } = await supabase
-      .from('interpretation_counts')
-      .upsert(
-        {
-          interpretation_id: interpretation.id,
-          reply_count: (counts[interpretation.id]?.reply_count || 1) - 1,
-          upvote_count: counts[interpretation.id]?.upvote_count || 0,
-          report_count: counts[interpretation.id]?.report_count || 0,
-        },
-        { onConflict: 'interpretation_id' }
-      );
-
-    if (countError) {
-      if (!toast.isActive(`reply-count-${replyId}`)) {
-        toast.error(`Failed to update reply count: ${countError.message}`, { id: `reply-count-${replyId}`, theme: 'light', autoClose: 5000 });
-      }
-      return;
-    }
-
-    setCounts((prev) => ({
-      ...prev,
-      [interpretation.id]: {
-        interpretation_id: interpretation.id,
-        reply_count: (prev[interpretation.id]?.reply_count || 1) - 1,
-        upvote_count: prev[interpretation.id]?.upvote_count || 0,
-        report_count: prev[interpretation.id]?.report_count || 0,
-      },
-    }));
-
-    if (!toast.isActive(`delete-reply-success-${replyId}`)) {
-      toast.success('Reply deleted.', { id: `delete-reply-success-${replyId}`, theme: 'light', autoClose: 3000 });
-    }
-  }, [interpretation.id, replies, counts, setReplies, setCounts]);
+  }, [verse_id, replyText, interpretation.id, counts, setReplies, setCounts, userProfile]);
 
   return (
-    <>
-      <div className="flex flex-col sm:flex-row items-start space-x-0 sm:space-x-2 space-y-2 sm:space-y-0 max-w-full overflow-x-hidden">
-        <div className="flex-shrink-0">
-          {interpretation.avatar ? (
-            <img
-              src={interpretation.avatar}
-              alt={`${interpretation.username || 'User'}'s avatar`}
-              className="w-8 h-8 sm:w-10 sm:h-10 rounded-full border-2 border-teal-500 object-cover max-w-full"
-              onError={(e) => {
-                (e.target as HTMLImageElement).style.display = 'none';
-                (e.target as HTMLImageElement).nextElementSibling!.style.display = 'flex';
-              }}
-            />
-          ) : (
-            <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full border-2 border-teal-500 flex items-center justify-center bg-gray-200">
-              <FaUser className="text-gray-500 w-4 h-4 sm:w-5 sm:h-5" />
-            </div>
-          )}
-        </div>
-        <div className="flex-1 w-full max-w-full overflow-x-hidden">
-          <p className="font-semibold text-gray-800 text-sm sm:text-base break-words">{interpretation.username || 'Anonymous'}</p>
-          <p className="text-gray-600 mb-2 sm:mb-4 text-sm sm:text-base break-words interpretation-text code-text max-w-full overflow-x-hidden">{renderInterpretationText(interpretation.interpretation_text)}</p>
-          <div className="flex flex-col sm:flex-row sm:justify-between space-y-2 sm:space-y-0 max-w-full overflow-x-hidden">
-            <div className="flex space-x-2 items-center flex-wrap">
-              <div className="flex items-center">
-                <button
-                  onClick={() => handleUpvoteClick(interpretation.id, 'interpretation')}
-                  className="text-gray-400 hover:text-teal-500"
-                  aria-label="Upvote interpretation"
-                  title="Upvote"
-                >
-                  <FaSortAmountUpAlt className="w-4 h-4 sm:w-5 sm:h-5" />
-                </button>
-                <span className="ml-1 text-sm text-gray-600">{counts[interpretation.id]?.upvote_count || 0}</span>
-              </div>
-              <div className="flex items-center">
-                <button
-                  onClick={handleReplyClick}
-                  className="text-gray-400 hover:text-teal-500"
-                  aria-label="Reply to interpretation"
-                  title="Reply"
-                >
-                  <FaReply className="w-4 h-4 sm:w-5 sm:h-5" />
-                </button>
-                <span className="ml-1 text-sm text-gray-600">{counts[interpretation.id]?.reply_count || 0}</span>
-              </div>
-              <div className="flex items-center">
-                <button
-                  onClick={() => handleReportClick(interpretation.id, 'interpretation')}
-                  className="text-gray-400 hover:text-red-500"
-                  aria-label="Report interpretation"
-                  title="Report"
-                >
-                  <FaFlag className="w-4 h-4 sm:w-5 sm:h-5" />
-                </button>
-                <span className="ml-1 text-sm text-gray-600">{counts[interpretation.id]?.report_count || 0}</span>
-              </div>
-              {userProfile && userProfile.id === interpretation.user_id && (
-                <div className="flex items-center">
-                  <button
-                    onClick={handleDeleteInterpretation}
-                    className="text-gray-400 hover:text-red-500"
-                    aria-label="Delete interpretation"
-                    title="Delete"
-                  >
-                    <FaTrash className="w-4 h-4 sm:w-5 sm:h-5" />
-                  </button>
-                </div>
-              )}
-            </div>
+    <div className={`flex flex-col sm:flex-row items-start space-x-0 sm:space-x-2 space-y-2 sm:space-y-0 max-w-full ${className}`}>
+      <div className="flex-shrink-0">
+        {interpretation.avatar ? (
+          <img
+            src={interpretation.avatar}
+            alt={`${interpretation.username || 'User'}'s avatar`}
+            className="w-8 h-8 sm:w-10 sm:h-10 rounded-full border-2 border-teal-500 object-cover"
+            onError={(e) => {
+              e.currentTarget.style.display = 'none';
+              e.currentTarget.nextElementSibling!.style.display = 'flex';
+            }}
+          />
+        ) : (
+          <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full border-2 border-teal-500 flex items-center justify-center bg-gray-200">
+            <FaUser className="text-gray-500 w-4 h-4 sm:w-5 sm:h-5" />
           </div>
-          {replies[interpretation.id]?.length > 0 && (
-            <button
-              onClick={() => setAccordionOpen((prev) => ({ ...prev, [interpretation.id]: !prev[interpretation.id] }))}
-              className="flex items-center w-full text-left py-2 px-4 rounded bg-gray-100 hover:bg-gray-200 text-gray-600 text-sm font-semibold mt-2 max-w-full overflow-x-hidden"
-              aria-expanded={accordionOpen[interpretation.id]}
-              aria-controls={`replies-${interpretation.id}`}
-            >
-              <span>View Replies ({replies[interpretation.id].length})</span>
-              <FaChevronDown
-                className="ml-2 w-4 h-4 transition-transform duration-200"
-              />
-            </button>
-          )}
-          <button
-            onClick={handleReplyClick}
-            className="text-gray-400 hover:text-teal-500 mt-2 flex items-center text-sm max-w-full overflow-x-hidden"
-            aria-label="Reply to interpretation"
-            title="Reply"
-          >
-            <FaReply className="w-4 h-4 sm:w-5 sm:h-5 mr-1" /> Reply
-          </button>
-          {replies[interpretation.id]?.length > 0 && accordionOpen[interpretation.id] && (
-            <ul id={`replies-${interpretation.id}`} className="ml-2 sm:ml-4 mt-2 sm:mt-4 space-y-2 max-w-full overflow-x-hidden">
-              {replies[interpretation.id].map((reply) => (
-                <li key={reply.id} className="flex items-start space-x-2 max-w-full overflow-x-hidden">
-                  <div className="flex-shrink-0">
-                    {reply.avatar ? (
-                      <img
-                        src={reply.avatar}
-                        alt={`${reply.username || 'User'}'s avatar`}
-                        className="w-6 h-6 sm:w-8 sm:h-8 rounded-md border-2 border-teal-500 object-cover max-w-full"
-                        onError={(e) => {
-                          (e.target as HTMLImageElement).style.display = 'none';
-                          (e.target as HTMLImageElement).nextElementSibling!.style.display = 'flex';
-                        }}
-                      />
-                    ) : (
-                      <div className="w-6 h-6 sm:w-8 sm:h-8 rounded-md border-2 border-teal-500 flex items-center justify-center bg-gray-200">
-                        <FaUser className="text-gray-500 w-3 h-3 sm:w-4 sm:h-4" />
-                      </div>
-                    )}
-                  </div>
-                  <div className="flex-1 max-w-full overflow-x-hidden">
-                    <p className="font-semibold text-gray-800 text-sm break-words">{reply.username || 'Anonymous'}</p>
-                    <p className="text-gray-600 text-sm break-words reply-text code-text max-w-full overflow-x-hidden">{reply.text}</p>
-                    <div className="flex space-x-2 mt-2 items-center flex-wrap">
-                      <div className="flex items-center">
-                        <button
-                          onClick={() => handleUpvoteClick(reply.id, 'reply')}
-                          className="text-gray-400 hover:text-teal-500"
-                          aria-label="Upvote reply"
-                          title="Upvote"
-                        >
-                          <FaSortAmountUpAlt className="w-4 h-4 sm:w-5 sm:h-5" />
-                        </button>
-                        <span className="ml-1 text-sm text-gray-600">{replyCounts[reply.id]?.upvote_count || 0}</span>
-                      </div>
-                      <div className="flex items-center">
-                        <button
-                          onClick={() => handleReportClick(reply.id, 'reply')}
-                          className="text-gray-400 hover:text-red-500"
-                          aria-label="Report reply"
-                          title="Report"
-                        >
-                          <FaFlag className="w-4 h-4 sm:w-5 sm:h-5" />
-                        </button>
-                        <span className="ml-1 text-sm text-gray-600">{replyCounts[reply.id]?.report_count || 0}</span>
-                      </div>
-                      {userProfile && userProfile.id === reply.user_id && (
-                        <div className="flex items-center">
-                          <button
-                            onClick={() => handleDeleteReply(reply.id)}
-                            className="text-gray-400 hover:text-red-500"
-                            aria-label="Delete reply"
-                            title="Delete"
-                          >
-                            <FaTrash className="w-4 h-4 sm:w-5 sm:h-5" />
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
+        )}
       </div>
-
+      <div className="flex-1 w-full max-w-full">
+        <p className="font-semibold text-gray-800 text-sm sm:text-base break-words">{interpretation.username || 'Anonymous'}</p>
+        <p className="text-gray-600 mb-2 sm:mb-4 text-sm sm:text-base break-words">{renderInterpretationText(interpretation.interpretation_text)}</p>
+        <div className="flex flex-col sm:flex-row sm:justify-between space-y-2 sm:space-y-0">
+          <div className="flex space-x-2 items-center flex-wrap">
+            <div className="flex items-center">
+              <button
+                onClick={() => handleUpvoteClick(interpretation.id, 'interpretation')}
+                className="text-gray-400 hover:text-teal-500"
+                aria-label="Upvote interpretation"
+                title="Upvote"
+              >
+                <FaSortAmountUpAlt className="w-5 h-5 sm:w-6 sm:h-6" />
+              </button>
+              <span className="ml-1 text-sm text-gray-600">{counts[interpretation.id]?.upvote_count || 0}</span>
+            </div>
+            <div className="flex items-center">
+              <button
+                onClick={handleReplyClick}
+                className="text-gray-400 hover:text-teal-500"
+                aria-label="Reply to interpretation"
+                title="Reply"
+              >
+                <FaReply className="w-5 h-5 sm:w-6 sm:h-6" />
+              </button>
+              <span className="ml-1 text-sm text-gray-600">{counts[interpretation.id]?.reply_count || 0}</span>
+            </div>
+            <div className="flex items-center">
+              <button
+                onClick={() => handleReportClick(interpretation.id, 'interpretation')}
+                className="text-gray-400 hover:text-red-500"
+                aria-label="Report interpretation"
+                title="Report"
+              >
+                <FaFlag className="w-5 h-5 sm:w-6 sm:h-6" />
+              </button>
+              <span className="ml-1 text-sm text-gray-600">{counts[interpretation.id]?.report_count || 0}</span>
+            </div>
+            {userProfile?.id === interpretation.user_id && (
+              <div className="flex items-center">
+                <button
+                  onClick={handleDeleteInterpretation}
+                  className="text-gray-400 hover:text-red-500"
+                  aria-label="Delete interpretation"
+                  title="Delete"
+                >
+                  <FaTrash className="w-5 h-5 sm:w-6 sm:h-6" />
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+        <Replies
+          interpretationId={interpretation.id}
+          replies={replies[interpretation.id] || []}
+          replyCounts={replyCounts}
+          userProfile={userProfile}
+          accordionOpen={accordionOpen[interpretation.id] || false}
+          setAccordionOpen={(id, open) => setAccordionOpen((prev) => ({ ...prev, [id]: open }))}
+          handleUpvoteClick={handleUpvoteClick}
+          handleReportClick={handleReportClick}
+          setReplies={setReplies}
+          setCounts={setCounts}
+          counts={counts}
+        />
+        <button
+          onClick={handleReplyClick}
+          className="text-gray-400 hover:text-teal-500 mt-2 flex items-center text-sm"
+          aria-label="Reply this interpretation"
+          title="Reply"
+        >
+          <FaReply className="w-4 h-4 sm:w-5 sm:h-5 mr-1" /> Reply
+        </button>
+      </div>
       {isReportModalOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 overflow-x-hidden">
-          <div className="bg-white p-6 rounded-lg shadow-md w-full max-w-sm mx-2 sm:max-w-md sm:mx-4 overflow-x-hidden">
-            <h3 className="text-xl sm:text-2xl font-extrabold text-gray-800 mb-2 sm:mb-4">Report</h3>
-            <form onSubmit={handleReportSubmit} className="space-y-2 sm:space-y-4 max-w-full overflow-x-hidden">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white p-6 rounded-lg shadow-md w-full max-w-sm mx-2 sm:max-w-md sm:mx-4">
+            <h3 className="text-xl sm:text-2xl font-bold text-gray-800 mb-4">Report</h3>
+            <form onSubmit={handleReportSubmit} className="space-y-4">
               <div>
                 <label className="block text-gray-600 text-sm">Reason</label>
                 <div className="space-y-2">
@@ -807,7 +567,7 @@ export default function Interpretation({
                         value={reason}
                         checked={reportReason === reason}
                         onChange={(e) => setReportReason(e.target.value as 'spam' | 'blasphemy' | 'offensive')}
-                        className="mr-1 sm:mr-2"
+                        className="mr-2"
                         aria-label={`Report as ${reason}`}
                       />
                       {reason.charAt(0).toUpperCase() + reason.slice(1)}
@@ -816,25 +576,18 @@ export default function Interpretation({
                 </div>
               </div>
               <div>
-                <label htmlFor="report-explanation" className="block text-gray-600 text-sm">
-                  Explanation (optional, max 20 words)
-                </label>
+                <label htmlFor="report-explanation" className="block text-gray-600 text-sm">Explanation (optional, max 20 words)</label>
                 <textarea
                   id="report-explanation"
                   value={reportExplanation}
                   onChange={(e) => setReportExplanation(e.target.value)}
-                  className="w-full p-2 border border-gray-300 rounded-md bg-white text-gray-600 text-sm focus:outline-none focus:ring-2 focus:ring-teal-600 max-w-full overflow-x-hidden break-words code-text"
+                  className="w-full p-2 border border-gray-300 rounded-md text-sm"
                   rows={2}
                   aria-label="Report explanation"
                 />
               </div>
-              <div className="flex flex-col sm:flex-row sm:space-x-2 space-y-2 sm:space-y-0">
-                <button
-                  type="submit"
-                  className="bg-[#207788] text-white px-4 py-2 rounded-md hover:bg-[#1a5f6e] text-sm"
-                >
-                  Submit
-                </button>
+              <div className="flex space-x-2">
+                <button type="submit" className="bg-teal-600 text-white px-4 py-2 rounded-md text-sm">Submit</button>
                 <button
                   type="button"
                   onClick={() => {
@@ -844,7 +597,7 @@ export default function Interpretation({
                     setCurrentId(null);
                     setCurrentType(null);
                   }}
-                  className="bg-gray-300 text-gray-600 px-4 py-2 rounded-md hover:bg-gray-400 text-sm"
+                  className="bg-gray-300 text-gray-600 px-4 py-2 rounded-md text-sm"
                 >
                   Cancel
                 </button>
@@ -853,7 +606,6 @@ export default function Interpretation({
           </div>
         </div>
       )}
-
       <Transition appear show={isReplyModalOpen} as="div">
         <Dialog as="div" className="relative z-50" onClose={() => setIsReplyModalOpen(false)}>
           <Transition.Child
@@ -865,11 +617,10 @@ export default function Interpretation({
             leaveFrom="opacity-100"
             leaveTo="opacity-0"
           >
-            <div className="fixed inset-0 bg-black bg-opacity-50 overflow-x-hidden" />
+            <div className="fixed inset-0 bg-black bg-opacity-50" />
           </Transition.Child>
-
-          <div className="fixed inset-0 overflow-y-auto overflow-x-hidden">
-            <div className="flex min-h-full items-center justify-center p-2 sm:p-4 text-center">
+          <div className="fixed inset-0 overflow-y-auto">
+            <div className="flex min-h-full items-center justify-center p-4">
               <Transition.Child
                 as="div"
                 enter="ease-out duration-300"
@@ -879,49 +630,40 @@ export default function Interpretation({
                 leaveFrom="opacity-100 scale-100"
                 leaveTo="opacity-0 scale-95"
               >
-                <Dialog.Panel className="w-full max-w-sm transform overflow-x-hidden rounded-lg bg-white p-5 sm:p-6 text-left align-middle shadow-xl transition-all sm:max-w-md">
-                  <Dialog.Title as="h3" className="text-lg font-medium leading-6 text-gray-900">
-                    Add Reply
-                  </Dialog.Title>
-                  <form onSubmit={handleReplySubmit} className="mt-2 sm:mt-4 space-y-3 sm:space-y-4 max-w-full overflow-x-hidden">
+               <Dialog.Panel className="w-[100%] bg-white p-6 rounded-lg shadow-xl">
+                <Dialog.Title as="h3" className="text-lg font-bold text-gray-900">Add Reply</Dialog.Title>
+                <form onSubmit={handleReplySubmit} className="mt-4 space-y-4">
                     <div>
-                      <label htmlFor="reply-text" className="block text-sm font-semibold text-gray-600">
-                        Your Reply
-                      </label>
-                      <textarea
+                    <label htmlFor="reply-text" className="block text-sm font-semibold text-gray-600">Your Reply</label>
+                    <textarea
                         id="reply-text"
                         value={replyText}
                         onChange={(e) => setReplyText(e.target.value)}
-                        className="mt-1 w-full p-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 max-w-full overflow-x-hidden break-words code-text"
+                        className="mt-1 w-full p-2 border rounded-md text-sm"
                         rows={4}
                         aria-label="Reply text"
-                      />
+                    />
                     </div>
-                    <div className="flex space-x-2 sm:space-x-4 justify-end">
-                      <button
-                        type="submit"
-                        className="bg-[#207788] text-white px-4 py-2 rounded-md hover:bg-[#1a5f6e] text-sm"
-                      >
-                        Submit
-                      </button>
-                      <button
+                    <div className="flex space-x-4 justify-end">
+                    <button type="submit" className="bg-teal-600 text-white px-4 py-2 rounded-md text-sm">Submit</button>
+                    <button
                         type="button"
                         onClick={() => {
-                          setIsReplyModalOpen(false);
-                          setReplyText('');
+                        setIsReplyModalOpen(false);
+                        setReplyText('');
                         }}
-                        className="bg-gray-300 text-gray-600 px-4 py-2 rounded-md hover:bg-gray-400 text-sm"
-                      >
+                        className="bg-gray-300 text-gray-600 px-4 py-2 rounded-md text-sm"
+                    >
                         Cancel
-                      </button>
+                    </button>
                     </div>
-                  </form>
+                </form>
                 </Dialog.Panel>
               </Transition.Child>
             </div>
           </div>
         </Dialog>
       </Transition>
-    </>
+    </div>
   );
 }

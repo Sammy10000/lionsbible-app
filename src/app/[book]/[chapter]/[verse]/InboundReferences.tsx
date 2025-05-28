@@ -88,7 +88,7 @@ export default function InboundReferences({ verseId }: InboundReferencesProps) {
                   <FaLink className="mr-2 text-teal-500 dark:text-teal-400" aria-hidden="true" />
                   Inbound References
                   <span className="ml-2 text-sm sm:text-base md:text-lg text-teal-500 dark:text-teal-400">
-                    ({references.length})
+                    {references.length}
                   </span>
                 </h2>
                 <p className="text-xs sm:text-sm md:text-base text-gray-500 dark:text-gray-400 mt-1 ml-8 font-comfortaa">

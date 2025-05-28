@@ -5,6 +5,7 @@ import { ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 import InterpretationForm from './InterpretationForm';
 import Interpretation from './Interpretation';
+import { BsChatDots } from "react-icons/bs";
 
 function debounce(func: (...args: any[]) => void, wait: number): ((...args: any[]) => void) & { cancel: () => void } {
   let timeout: NodeJS.Timeout | null = null;
@@ -153,7 +154,7 @@ export default function InterpretationSection({
       if (formattedData.length > 0) {
         const interpretationIds = formattedData.map((item) => item.id);
         const { data: countsData } = await supabase
-          .from('counts')
+          .from('interpretation_counts')
           .select('interpretation_id, reply_count, upvote_count, report_count')
           .in('interpretation_id', interpretationIds);
 
@@ -267,7 +268,14 @@ export default function InterpretationSection({
       />
       {interpretations.length > 0 && (
         <div className="mt-6 sm:mt-8 max-w-full">
-          <h3 className="text-lg sm:text-2xl font-semibold sm:font-extrabold text-gray-800 mb-4 sm:mb-6">Community Insights</h3>
+          
+          <h3 className="w-full text-left text-white flex py-4 px-6 bg-gradient-to-r from-teal-50 to-gray-50 dark:from-teal-900 dark:to-gray-800 rounded-lg hover:bg-teal-100 dark:hover:bg-teal-800 transition-colors duration-200">
+              <BsChatDots className="mr-2 text-teal-500" aria-hidden="true" />
+              Community Insights
+              <span className="ml-2 text-sm sm:text-base md:text-lg text-teal-500 dark:text-teal-400">
+                {interpretations.length}
+              </span>
+          </h3>
           <ul className="space-y-6 max-w-full overflow-x-hidden m-2 sm:m-4">
             {interpretations.map((interpretation, index) => (
               <li key={interpretation.id} className="max-w-full overflow-x-hidden">
