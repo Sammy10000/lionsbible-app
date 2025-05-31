@@ -1,5 +1,4 @@
 'use client';
-
 import { useState, useEffect } from 'react';
 import { FaUser, FaTimes } from 'react-icons/fa';
 import { createClient } from '@/utils/supabase/client';
@@ -7,21 +6,29 @@ import { toast, ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 import { useRouter } from 'next/navigation';
 
-export default function UserProfile() {
+interface Props {
+  isModalOpen?: boolean;
+  setIsModalOpen?: (open: boolean) => void;
+}
+
+export default function UserProfile({ isModalOpen: parentModalOpen, setIsModalOpen: setParentModalOpen }: Props) {
   const supabase = createClient();
   const router = useRouter();
-  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [internalModalOpen, setInternalModalOpen] = useState(false);
   const [isSignUp, setIsSignUp] = useState(true);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [username, setUsername] = useState('');
   const [user, setUser] = useState<any>(null);
-  const [profile, setProfile] = useState<{ 
+  const [profile, setProfile] = useState<{
     username: string | null;
     avatar: string | null;
   } | null>(null);
   const [loading, setLoading] = useState(false);
   const [avatarError, setAvatarError] = useState(false);
+
+  const isModalOpen = parentModalOpen !== undefined ? parentModalOpen : internalModalOpen;
+  const setIsModalOpen = setParentModalOpen || setInternalModalOpen;
 
   useEffect(() => {
     let mounted = true;
@@ -61,7 +68,7 @@ export default function UserProfile() {
       mounted = false;
       subscription.unsubscribe();
     };
-  }, []);
+  }, [setIsModalOpen]);
 
   const checkUsernameUnique = async (inputUsername: string) => {
     try {

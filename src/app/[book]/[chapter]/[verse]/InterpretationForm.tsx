@@ -1,18 +1,10 @@
+// src/components/InterpretationForm.tsx
 'use client';
 import { useState, useEffect } from 'react';
 import { createClient } from '@/utils/supabase/client';
 import { toast } from 'react-toastify';
 import sanitizeHtml from 'sanitize-html';
-import { Counts } from './InterpretationSection';
-import { Reply, ReplyCounts } from './Replies';
-
-interface Interpretation {
-  id: string;
-  interpretation_text: string;
-  user_id: string;
-  username: string | null;
-  avatar: string | null;
-}
+import { InterpretationType, Counts } from '@/types';
 
 interface ReferenceInput {
   book: string;
@@ -26,14 +18,15 @@ interface Props {
   verseId: string;
   userProfile: { id: string; username: string | null; avatar: string | null } | null;
   onSuccess?: () => void;
-  setInterpretations: (fn: (prev: Interpretation[]) => Interpretation[]) => void;
+  setInterpretations: (fn: (prev: InterpretationType[]) => InterpretationType[]) => void;
   counts: { [key: string]: Counts };
-  setCounts: (counts: { [key: string]: Counts }) => void;
+  setCounts: (fn: (prev: { [key: string]: Counts }) => { [key: string]: Counts }) => void;
   books: string[];
   chapters: { [book: string]: number[] };
   verses: { [key: string]: number[] };
   fetchChapters: (book: string) => void;
   fetchVerses: (book: string, chapter: number) => void;
+  setIsModalOpen: (open: boolean) => void; // Added for auth modal
 }
 
 export default function InterpretationForm({
@@ -48,9 +41,10 @@ export default function InterpretationForm({
   verses,
   fetchChapters,
   fetchVerses,
+  setIsModalOpen,
 }: Props) {
   const [interpretationText, setInterpretationText] = useState('');
-  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isReferenceModalOpen, setIsReferenceModalOpen] = useState(false); // Renamed to avoid conflict
   const [referenceInput, setReferenceInput] = useState<ReferenceInput>({
     book: '',
     chapter: 0,
@@ -72,16 +66,21 @@ export default function InterpretationForm({
   };
 
   const isValidText = (input: string): boolean => {
-    const codePattern = /[<>{};`'"\\\/]|(\b(function|eval|alert|script|SELECT|INSERT|DELETE|DROP|UNION|EXEC|DECLARE|CREATE|ALTER)\b)/i;
+    const codePattern =
+      /(<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>|\b(function|eval|alert|script|SELECT|INSERT|DELETE|DROP|UNION|EXEC|DECLARE|CREATE|ALTER)\b)/i;
     return !codePattern.test(input);
   };
 
   useEffect(() => {
-    fetchChapters(referenceInput.book);
+    if (referenceInput.book) {
+      fetchChapters(referenceInput.book);
+    }
   }, [referenceInput.book, fetchChapters]);
 
   useEffect(() => {
-    fetchVerses(referenceInput.book, referenceInput.chapter);
+    if (referenceInput.book && referenceInput.chapter) {
+      fetchVerses(referenceInput.book, referenceInput.chapter);
+    }
   }, [referenceInput.book, referenceInput.chapter, fetchVerses]);
 
   const handleAddReference = async () => {
@@ -148,7 +147,7 @@ export default function InterpretationForm({
         : `[${referenceInput.book} ${referenceInput.chapter}:${referenceInput.fromVerse}-${referenceInput.toVerse}]`;
 
     setInterpretationText((prev) => `${prev} ${referenceLink} (${sanitizedReferenceText})`.trim());
-    setIsModalOpen(false);
+    setIsReferenceModalOpen(false);
     setReferenceInput({ book: '', chapter: 0, fromVerse: 0, toVerse: 0, reference_text: '' });
     setError(null);
     toast.success('Reference added to your insight!', {
@@ -160,169 +159,186 @@ export default function InterpretationForm({
 
   const handleInterpretationSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      toast.error('Please log in to add an interpretation.', {
-        toastId: 'auth-error',
-        theme: 'light',
-        autoClose: 5000,
-      });
-      return;
-    }
-
-    const sanitizedText = sanitizeInput(interpretationText);
-    if (!isValidText(sanitizedText)) {
-      toast.error('Interpretation contains invalid characters or code.', {
-        toastId: 'interpretation-code-error',
-        theme: 'light',
-        autoClose: 5000,
-      });
-      return;
-    }
-
-    const { data: existingInterpretation, error: checkError } = await supabase
-      .from('interpretations')
-      .select('id')
-      .eq('verse_id', verseId)
-      .eq('user_id', user.id)
-      .eq('is_hidden', false)
-      .single();
-
-    if (checkError && checkError.code !== 'PGRST116') {
-      toast.error(`Error checking existing interpretation: ${checkError.message}`, {
-        toastId: 'check-error',
-        theme: 'light',
-        autoClose: 5000,
-      });
-      return;
-    }
-
-    if (existingInterpretation) {
-      toast.error('You’ve already shared an interpretation for this verse. You can only add replies.', {
-        toastId: 'existing-interpretation',
-        theme: 'light',
-        autoClose: 7000,
-      });
-      return;
-    }
-
-    const words = sanitizedText.trim().split(/\s+/).filter((word) => word.length > 0);
-    if (words.length < 12) {
-      toast.error('Interpretation must be at least 12 words.', {
-        toastId: 'word-count-error',
-        theme: 'light',
-        autoClose: 5000,
-      });
-      return;
-    }
-
-    const { data, error } = await supabase
-      .from('interpretations')
-      .insert({
-        verse_id: verseId,
-        user_id: user.id,
-        text: sanitizedText,
-        is_hidden: false,
-      })
-      .select('id')
-      .single();
-
-    if (error) {
-      toast.error(`Failed to submit interpretation: ${error.message}`, {
-        toastId: 'submit-error',
-        theme: 'light',
-        autoClose: 5000,
-      });
-      return;
-    }
-
-    await supabase
-      .from('counts')
-      .insert({
-        interpretation_id: data.id,
-        reply_count: 0,
-        upvote_count: 0,
-        report_count: 0,
-      });
-
-    setCounts({
-      ...counts,
-      [data.id]: {
-        interpretation_id: data.id,
-        reply_count: 0,
-        upvote_count: 0,
-        report_count: 0,
-      },
-    });
-
-    const referenceRegex = /\[([^\]]+)\]\s*\(([^)]+)\)/g;
-    const references: { book: string; chapter: number; verse: number; reference_text: string }[] = [];
-    let match;
-    while ((match = referenceRegex.exec(sanitizedText)) !== null) {
-      const [book, chapterVerse] = match[1].split(' ');
-      let chapter: number, fromVerse: number, toVerse: number;
-      if (chapterVerse.includes('-')) {
-        const [ch, verseRange] = chapterVerse.split(':');
-        chapter = parseInt(ch);
-        const [startVerse, endVerse] = verseRange.split('-').map(Number);
-        fromVerse = startVerse;
-        toVerse = endVerse || startVerse;
-      } else {
-        const [ch, v] = chapterVerse.split(':').map(Number);
-        chapter = ch;
-        fromVerse = v;
-        toVerse = v;
-      }
-      for (let verse = fromVerse; verse <= toVerse; verse++) {
-        references.push({
-          book,
-          chapter,
-          verse,
-          reference_text: sanitizeInput(match[2]),
+    try {
+      const { data: { user }, error: authError } = await supabase.auth.getUser();
+      if (authError || !user) {
+        setIsModalOpen(true); // Trigger authentication modal
+        toast.info('Please log in to add an interpretation.', {
+          toastId: 'auth-error',
+          theme: 'light',
+          autoClose: 5000,
         });
+        return;
       }
-    }
 
-    for (const ref of references) {
-      const { data: targetVerse } = await supabase
-        .from('verses')
+      const sanitizedText = sanitizeInput(interpretationText);
+      if (!isValidText(sanitizedText)) {
+        toast.error('Interpretation contains invalid characters or code.', {
+          toastId: 'interpretation-code-error',
+          theme: 'light',
+          autoClose: 5000,
+        });
+        return;
+      }
+
+      const { data: existingInterpretation, error: checkError } = await supabase
+        .from('interpretations')
         .select('id')
-        .eq('book', ref.book)
-        .eq('chapter', ref.chapter)
-        .eq('verse', ref.verse)
+        .eq('verse_id', verseId)
+        .eq('user_id', user.id)
+        .eq('is_hidden', false)
         .single();
 
-      if (targetVerse) {
-        await supabase
-          .from('verse_references')
-          .insert({
-            source_verse_id: verseId,
-            target_verse_id: targetVerse.id,
-            user_id: user.id,
-            reference_text: ref.reference_text,
-            is_hidden: false,
-          });
+      if (checkError && checkError.code !== 'PGRST116') {
+        toast.error(`Error checking existing interpretation: ${checkError.message}`, {
+          toastId: 'check-error',
+          theme: 'light',
+          autoClose: 5000,
+        });
+        return;
       }
+
+      if (existingInterpretation) {
+        toast.error('You’ve already shared an interpretation for this verse. You can only add replies.', {
+          toastId: 'existing-interpretation',
+          theme: 'light',
+          autoClose: 7000,
+        });
+        return;
+      }
+
+      const words = sanitizedText.trim().split(/\s+/).filter((word) => word.length > 0);
+      if (words.length < 12) {
+        toast.error('Interpretation must be at least 12 words.', {
+          toastId: 'word-count-error',
+          theme: 'light',
+          autoClose: 5000,
+        });
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from('interpretations')
+        .insert({
+          verse_id: verseId,
+          user_id: user.id,
+          text: sanitizedText,
+          is_hidden: false,
+        })
+        .select('id, text, user_id')
+        .single();
+
+      if (error) {
+        toast.error(`Failed to submit interpretation: ${error.message}`, {
+          toastId: 'submit-error',
+          theme: 'light',
+          autoClose: 5000,
+        });
+        return;
+      }
+
+      const { data: profile } = await supabase
+        .from('user_profiles')
+        .select('username, avatar')
+        .eq('user_id', user.id)
+        .single();
+
+      await supabase
+        .from('interpretation_counts')
+        .insert({
+          interpretation_id: data.id,
+          reply_count: 0,
+          upvote_count: 0,
+          report_count: 0,
+        });
+
+      setCounts((prev) => ({
+        ...prev,
+        [data.id]: {
+          interpretation_id: data.id,
+          reply_count: 0,
+          upvote_count: 0,
+          report_count: 0,
+        },
+      }));
+
+      const referenceRegex = /\[([^\]]+)\]\s*\(([^)]+)\)/g;
+      const references: { book: string; chapter: number; verse: number; reference_text: string }[] = [];
+      let match;
+      while ((match = referenceRegex.exec(sanitizedText)) !== null) {
+        const [book, chapterVerse] = match[1].split(' ');
+        let chapter: number, fromVerse: number, toVerse: number;
+        if (chapterVerse.includes('-')) {
+          const [ch, verseRange] = chapterVerse.split(':');
+          chapter = parseInt(ch);
+          const [startVerse, endVerse] = verseRange.split('-').map(Number);
+          fromVerse = startVerse;
+          toVerse = endVerse || startVerse;
+        } else {
+          const [ch, v] = chapterVerse.split(':').map(Number);
+          chapter = ch;
+          fromVerse = v;
+          toVerse = v;
+        }
+        for (let verse = fromVerse; verse <= toVerse; verse++) {
+          references.push({
+            book,
+            chapter,
+            verse,
+            reference_text: sanitizeInput(match[2]),
+          });
+        }
+      }
+
+      for (const ref of references) {
+        const { data: targetVerse } = await supabase
+          .from('verses')
+          .select('id')
+          .eq('book', ref.book)
+          .eq('chapter', ref.chapter)
+          .eq('verse', ref.verse)
+          .single();
+
+        if (targetVerse) {
+          await supabase
+            .from('verse_references')
+            .insert({
+              source_verse_id: verseId,
+              target_verse_id: targetVerse.id,
+              user_id: user.id,
+              reference_text: ref.reference_text,
+              is_hidden: false,
+            });
+        }
+      }
+
+      setInterpretations((prev) => [
+        {
+          id: data.id,
+          interpretation_text: sanitizedText,
+          user_id: user.id,
+          username: profile?.username || 'Anonymous',
+          avatar: profile?.avatar || null,
+        },
+        ...prev,
+      ]);
+
+      setInterpretationText('');
+      onSuccess?.();
+      toast.success('Interpretation submitted!', {
+        toastId: 'submit-success',
+        theme: 'light',
+        autoClose: 5000,
+      });
+    } catch (error) {
+      console.error('Unexpected error in handleInterpretationSubmit:', error);
+      toast.error('Unexpected error during submission', {
+        toastId: 'submit-unexpected-error',
+        theme: 'light',
+        autoClose: 5000,
+      });
+      setIsModalOpen(true); // Trigger auth modal on unexpected errors
     }
-
-    setInterpretations((prev) => [
-      {
-        id: data.id,
-        interpretation_text: sanitizedText,
-        user_id: user.id,
-        username: userProfile?.username || 'Anonymous',
-        avatar: userProfile?.avatar || null,
-      },
-      ...prev,
-    ]);
-
-    setInterpretationText('');
-    onSuccess?.();
-    toast.success('Interpretation submitted!', {
-      toastId: 'submit-success',
-      theme: 'light',
-      autoClose: 5000,
-    });
   };
 
   return (
@@ -342,7 +358,7 @@ export default function InterpretationForm({
         <div className="flex flex-col sm:flex-row sm:space-x-4 space-y-2 sm:space-y-0">
           <button
             type="button"
-            onClick={() => setIsModalOpen(true)}
+            onClick={() => setIsReferenceModalOpen(true)}
             className="bg-[#207788] text-white px-4 py-2 w-[92%] sm:w-auto rounded hover:bg-[#1a5f6e] text-sm sm:text-base focus:ring-2 focus:ring-teal-500 ring-offset-2 m-2"
           >
             Add Scripture Reference
@@ -356,7 +372,7 @@ export default function InterpretationForm({
         </div>
       </form>
 
-      {isModalOpen && (
+      {isReferenceModalOpen && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 overflow-x-hidden">
           <div className="bg-white p-6 rounded-lg shadow-md w-full max-w-sm mx-2 sm:max-w-md sm:mx-4 overflow-x-hidden m-2 sm:m-4">
             <h3 className="text-xl sm:text-2xl font-extrabold text-gray-800 mb-4">Add Scripture Reference</h3>
@@ -484,7 +500,7 @@ export default function InterpretationForm({
                 <button
                   type="button"
                   onClick={() => {
-                    setIsModalOpen(false);
+                    setIsReferenceModalOpen(false);
                     setError(null);
                   }}
                   className="bg-gray-300 text-gray-800 px-4 py-2 rounded hover:bg-gray-400 text-sm focus:ring-2 focus:ring-gray-500 ring-offset-2 m-2"

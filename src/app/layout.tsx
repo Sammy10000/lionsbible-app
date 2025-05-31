@@ -1,9 +1,11 @@
-import type { Metadata } from 'next';
+// app/layout.tsx
 import { Comfortaa } from 'next/font/google';
 import './globals.css';
 import Header from '@/components/Header';
 import ThemeWrapper from '@/components/ThemeWrapper';
-import { Toaster } from 'react-hot-toast';
+import { ToastContainer } from 'react-toastify';
+import 'react-toastify/dist/ReactToastify.css';
+import type { Metadata, Viewport } from 'next';
 
 const comfortaa = Comfortaa({
   variable: '--font-comfortaa',
@@ -13,6 +15,9 @@ const comfortaa = Comfortaa({
 export const metadata: Metadata = {
   title: 'Lions Bible',
   description: 'A Progressive Web App for Bible study and community engagement on lionsbible.com.',
+};
+
+export const viewport: Viewport = {
   themeColor: '#000000',
 };
 
@@ -25,7 +30,16 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body className={`${comfortaa.variable} antialiased bg-base-100 text-base-content flex flex-col min-h-screen`}>
         <ThemeWrapper>
-          <Toaster position="top-right" toastOptions={{ duration: 4000 }} />
+          <ToastContainer
+            position="top-right"
+            autoClose={5000}
+            hideProgressBar={false}
+            closeOnClick
+            pauseOnHover={false}
+            pauseOnFocusLoss={false}
+            theme="light"
+            limit={1}
+          />
           <Header />
           <div className="flex flex-1">
             <main className="flex-1">{children}</main>

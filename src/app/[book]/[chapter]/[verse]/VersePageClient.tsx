@@ -5,8 +5,8 @@ import VerseCard from './VerseCard';
 import InterpretationSection from './InterpretationSection';
 import InboundReferences from './InboundReferences';
 import Navigation from './Navigation';
-import { toast, ToastContainer } from 'react-toastify'; // Import toast and ToastContainer
-import 'react-toastify/dist/ReactToastify.css'; // Import CSS
+import { toast, ToastContainer } from 'react-toastify';
+import 'react-toastify/dist/ReactToastify.css';
 
 interface Verse {
   id: string;
@@ -39,6 +39,7 @@ function VersePageClient({
   params: { book: string; chapter: string; verse: string };
 }) {
   const [isDarkMode, setIsDarkMode] = useState(false);
+  const [accordionOpen, setAccordionOpen] = useState<{ [key: string]: boolean }>({});
 
   // Memoized dark mode checker
   const checkDarkMode = useCallback(() => {
@@ -89,6 +90,8 @@ function VersePageClient({
           verseId={verse.id}
           userProfile={userProfile}
           onSuccess={() => toast.success('Insight submitted successfully!', { theme: isDarkMode ? 'dark' : 'light' })}
+          accordionOpen={accordionOpen}
+          setAccordionOpen={setAccordionOpen}
         />
         <InboundReferences verseId={verse.id} />
         <Navigation
